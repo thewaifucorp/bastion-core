@@ -1,0 +1,24 @@
+[package]
+name    = "bastion-memory"
+version = "0.1.0"
+edition = "2021"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+
+# Versions identical to the workspace root — the crate carries only what the
+# moved files actually use (audited import-by-import in M2 step 4).
+[dependencies]
+bastion-types   = { path = "../bastion-types" }
+bastion-runtime = { path = "../bastion-runtime" }
+async-trait     = "0.1"
+rusqlite        = { version = "0.39", features = ["bundled"] }
+serde_json      = "1"
+tokio           = { version = "1", features = ["full"] }
+anyhow          = "1"
+
+[dev-dependencies]
+tempfile = "3"

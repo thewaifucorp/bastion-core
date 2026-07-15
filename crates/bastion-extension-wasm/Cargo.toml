@@ -1,0 +1,35 @@
+[package]
+name    = "bastion-extension-wasm"
+version = "0.1.0"
+edition = "2021"
+
+# Loop 3-C (docs/revamp/C3-extension-protocol-design.md §2/§8.7): the `Wasm`
+# mechanism's sandbox. Deliberately ZERO bastion-* dependencies — this crate
+# knows nothing about ExtensionManifest/PermissionSet/Capability; it only
+# knows how to run a wasm32 module with no imports and a fuel budget, and
+# report a typed result. `src/extension/wasm.rs` (the app) is what wraps this
+# into an `ExtensionInstance`/`Capability`.
+#
+# `wasmi` (a pure-Rust, register-based INTERPRETER — no JIT/cranelift/LLVM
+# codegen backend) was chosen over `wasmtime` after a live feasibility check
+# in this environment: wasmtime pulls in ~207 transitive crates (cranelift
+# codegen, regalloc2, wasmparser, winch...) and, once linked into every one
+# of this workspace's ~20 test binaries, reliably exhausted this
+# disk-constrained sandbox's remaining space during `cargo test --workspace`
+# (repeated `ld terminated with signal 7 [Bus error]` even after a full
+# `cargo clean` + rebuild). `wasmi` is ~30 transitive crates, builds in
+# seconds, and its per-binary footprint is negligible by comparison — see
+# `docs/revamp/LOOP-REPORT.md` for the measured numbers. Same security
+# property either way: an empty `Linker` gives the guest zero ambient
+# authority, and both crates support fuel metering to bound compute.
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+
+[dependencies]
+wasmi     = "0.32"
+thiserror = "2"
+
+[dev-dependencies]

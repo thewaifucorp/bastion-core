@@ -1,0 +1,25 @@
+[package]
+name    = "bastion-extension-protocol"
+version = "0.1.0"
+edition = "2021"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+
+[dependencies]
+bastion-types = { path = "../bastion-types" }
+serde         = { version = "1", features = ["derive"] }
+serde_json    = "1"
+thiserror     = "2"
+# Manifest/compat-range vocabulary (ExtensionManifest.version/compat,
+# Requirement.version) — needs `serde` for manifest (de)serialization.
+semver        = { version = "1", features = ["serde"] }
+# Lockfile entry hashing (`docs/revamp/C3-extension-protocol-design.md` §1.1
+# `LockEntry.hash` — content digest of a resolved component, mirrors
+# `bastion-agent-runtime`'s `Artifact.digest` convention).
+sha2          = "0.10"
+
+[dev-dependencies]

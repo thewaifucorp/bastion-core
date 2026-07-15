@@ -1,0 +1,37 @@
+[package]
+name    = "bastion-mcp"
+version = "0.1.0"
+edition = "2021"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+
+# Versions identical to the workspace root — the crate carries only what the
+# moved files actually use (audited import-by-import in M2 step 5).
+[dependencies]
+bastion-types   = { path = "../bastion-types" }
+bastion-runtime = { path = "../bastion-runtime" }
+tokio           = { version = "1", features = ["full"] }
+rmcp            = { version = "1.6", features = [
+                      "client",
+                      "server",
+                      "transport-child-process",
+                      "transport-streamable-http-client-reqwest",
+                      "transport-io",
+                    ] }
+reqwest         = { version = "0.13", features = ["json", "stream"] }
+rusqlite        = { version = "0.39", features = ["bundled"] }
+rand            = "0.8"
+async-trait     = "0.1"
+serde_json      = "1"
+anyhow          = "1"
+tracing         = "0.1"
+
+[dev-dependencies]
+# oauth.rs tests spin up a tiny scripted axum server; client.rs tests serve
+# an in-process rmcp server over a tokio::io::duplex pair.
+axum     = "0.8.9"
+tempfile = "3"

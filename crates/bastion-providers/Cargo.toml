@@ -1,0 +1,40 @@
+[package]
+name    = "bastion-providers"
+version = "0.1.0"
+edition = "2021"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+
+# A-09 (docs/revamp/BACKLOG.md): the terminal-agent provider (`claude -p`/opencode via
+# stdout — achata mensagens em prompt, não preserva sessão/eventos, deixa tools internas
+# do CLI escaparem de egress/approval/budget) is legacy compatibility bridge, superseded by
+# the proven `AgentRuntime` substitute (A-03/A-04, `bastion-agent-runtime`). Feature-gated
+# OFF by default per the A-09 decision (flag FIRST, not removed) — a default build never
+# links `TerminalAgentProvider`; the code stays available for one deprecation window behind
+# this flag, never deleted here.
+[features]
+default = []
+legacy-terminal-agent = []
+
+# Versions identical to the workspace root — the crate carries only what the
+# moved files actually use (audited import-by-import in M2 step 5).
+[dependencies]
+bastion-types   = { path = "../bastion-types" }
+bastion-runtime = { path = "../bastion-runtime" }
+tokio           = { version = "1", features = ["full"] }
+async-openai    = { version = "0.38", features = ["chat-completion"] }
+reqwest         = { version = "0.13", features = ["json", "stream"] }
+async-trait     = "0.1"
+futures-util    = "0.3"
+anyhow          = "1"
+serde_json      = "1"
+tracing         = "0.1"
+
+[dev-dependencies]
+# Test-only (ollama.rs's GBNF-diagnostic test builds a schemars schema for
+# `bastion_types::CabinetVerdict`).
+schemars = "0.8"

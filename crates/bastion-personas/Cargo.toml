@@ -1,0 +1,32 @@
+[package]
+name    = "bastion-personas"
+version = "0.1.0"
+edition = "2021"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+
+# Versions identical to the workspace root — the crate carries only what the
+# moved files actually use (audited import-by-import in M2 step 6).
+[dependencies]
+bastion-types     = { path = "../bastion-types" }
+bastion-runtime   = { path = "../bastion-runtime" }
+bastion-memory    = { path = "../bastion-memory" }
+# PersonaResponder (Responder port impl) calls cabinet::{build_table,
+# orchestrator::deliberate, synth::synthesize} — this is the one
+# personas-depends-on-cognition edge (allowed direction; cognition never
+# depends back on this crate — cabinet::build_table takes a lookup closure
+# instead of &PersonaRegistry for exactly this reason, M2 step 6).
+bastion-cognition = { path = "../bastion-cognition" }
+anyhow            = "1"
+async-trait       = "0.1"
+opentelemetry     = { version = "0.32", features = ["trace"] }
+schemars          = "0.8"
+serde             = { version = "1", features = ["derive"] }
+serde_json        = "1"
+serde_norway      = "0.9.42"
+tokio             = { version = "1", features = ["full"] }
+tracing           = "0.1"

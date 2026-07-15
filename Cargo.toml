@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members  = ["crates/*", "examples/*"]
+
+# Size-optimized release profile (shared by every workspace member). Kept
+# identical to the pre-split monorepo so binary metrics stay comparable.
+# panic = "unwind" is REQUIRED: the agent loop's cabinet/runner JoinSet tasks
+# recover from a panicking provider via their Err(join_err) arms; "abort" would
+# turn that recovery into dead code.
+[profile.release]
+opt-level     = "z"
+lto           = true
+codegen-units = 1
+panic         = "unwind"
+strip         = true

@@ -1,0 +1,32 @@
+[package]
+name    = "bastion-runtime"
+version = "0.1.0"
+edition = "2021"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+
+# Versions identical to the workspace root — the kernel carries only what the
+# moved files actually use (audited import-by-import in M2 step 3b).
+[dependencies]
+bastion-types = { path = "../bastion-types" }
+# Ciclo 2.4 (docs/revamp/C2-backend-profile-design.md): the kernel's
+# BackendProfile/RuntimeRegistry name the AgentRuntime trait object directly
+# (routing policy, not a concrete harness) — see agent/backend.rs.
+bastion-agent-runtime = { path = "../bastion-agent-runtime" }
+tokio         = { version = "1", features = ["full"] }
+async-trait   = "0.1"
+futures-util  = "0.3"
+anyhow        = "1"
+thiserror     = "2"
+serde_json    = "1"
+tracing       = "0.1"
+rusqlite      = { version = "0.39", features = ["bundled"] }
+sha2          = "0.10"
+opentelemetry = { version = "0.32", features = ["trace"] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,36 @@
+[package]
+name    = "bastion-cognition"
+version = "0.1.0"
+edition = "2021"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+
+# Versions identical to the workspace root — the crate carries only what the
+# moved files actually use (audited import-by-import in M2 step 6).
+[dependencies]
+bastion-types   = { path = "../bastion-types" }
+bastion-runtime = { path = "../bastion-runtime" }
+bastion-memory  = { path = "../bastion-memory" }
+anyhow          = "1"
+async-trait     = "0.1"
+rusqlite        = { version = "0.39", features = ["bundled"] }
+schemars        = "0.8"
+serde           = { version = "1", features = ["derive"] }
+serde_json      = "1"
+tokio           = { version = "1", features = ["full"] }
+tracing         = "0.1"
+# EVAL-02's `verify_delta` (eval/verifier.rs) creates a scratch temp-file
+# SqliteMemory at runtime — not test-only, hence a regular dependency (also
+# used by the moved dream/procedural/memory_rag/identity/goal/proactive test
+# suites as a dev-dep, satisfied transitively here).
+tempfile        = "3"
+
+[dev-dependencies]
+# `learn::dedup`'s tests mock a `memory_embed` capability via `DirectFnAdapter`
+# (an MCP→capability adapter, `bastion-mcp`'s M2 step 5 extraction) — dev-only,
+# never a production edge.
+bastion-mcp = { path = "../bastion-mcp" }

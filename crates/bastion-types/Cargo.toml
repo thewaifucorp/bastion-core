@@ -1,0 +1,20 @@
+[package]
+name    = "bastion-types"
+version = "0.1.0"
+edition = "2021"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+
+[dependencies]
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror  = "2"
+anyhow     = "1"
+# M2 step 5: CabinetVerdict/Dissent need JsonSchema — a pure-data type moved
+# here from src/cabinet/synth.rs so bastion-providers' ollama.rs diagnostic
+# test can reference it without depending on product-level Cabinet logic.
+schemars   = "0.8"

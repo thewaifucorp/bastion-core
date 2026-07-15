@@ -1,0 +1,25 @@
+[package]
+name    = "embedded-host"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# M3-04: demonstrates the "second consumer" seam (docs/revamp/BACKLOG.md M5,
+# M1-ADR-substrate-split.md) an external embedded host would use: injecting
+# opaque context via TurnContextProvider, registering its OWN capability
+# through the public CapabilityRegistry API, and expressing an
+# approval/authorization policy — never a product/cognition dependency, never
+# the root `bastion` package. Fully offline, `cargo run -p embedded-host`
+# exits 0.
+[dependencies]
+bastion-types   = { path = "../../crates/bastion-types" }
+bastion-runtime = { path = "../../crates/bastion-runtime" }
+bastion-memory  = { path = "../../crates/bastion-memory" }
+tokio           = { version = "1", features = ["rt-multi-thread", "macros"] }
+async-trait     = "0.1"
+anyhow          = "1"
+serde_json      = "1"
+tempfile        = "3"
+
+[lints.rust]
+unsafe_code = "forbid"

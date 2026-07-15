@@ -1,0 +1,4 @@
+enum lib.rs:WasmError
+struct lib.rs:WasmSandbox
+fn lib.rs:call_i64_i64_to_i64
+fn lib.rs:new
