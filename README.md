@@ -24,6 +24,19 @@ The **OSS Rust substrate** for building persistent, governable, cognitive AI age
 | `bastion-extension-protocol` | extension manifests, permissions, trust tiers, lockfiles |
 | `bastion-extension-wasm` | `wasmi`-backed WASM/WASI extension sandbox |
 
+## Memory lineage
+
+Bastion's memory system is a synthesis inspired by two open-source projects:
+[Mem0](https://github.com/mem0ai/mem0), for persistent personalized agent memory,
+multi-level identity scoping, semantic retrieval, and memory lifecycle ideas; and
+[MemPalace](https://github.com/MemPalace/mempalace), for local-first verbatim storage,
+spatial taxonomy, scoped retrieval, and temporal knowledge-graph ideas.
+
+Bastion is not an official distribution of either project. Its own contribution is a
+governed memory contract: beliefs retain provenance and temporal validity, are scoped
+to canonical owners, can be contested/corrected/revoked, and remain subordinate to the
+runtime's capability and authority boundaries. See [Memory architecture](docs/MEMORY.md).
+
 ## Guarantees
 
 - **One tool surface** — everything goes through `CapabilityRegistry::invoke`, the single policy boundary. Agents never get raw SQL.
