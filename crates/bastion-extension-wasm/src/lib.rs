@@ -119,19 +119,23 @@ impl Default for WasmSandbox {
 mod tests {
     use super::*;
 
-    // Prebuilt fixture, shared with the app's own tests
-    // (`src/extension/wasm_fixtures/reference_extension.rs` documents the
-    // source + regeneration command). Duplicated here as bytes rather than a
-    // cross-crate path dependency — this crate has zero bastion-* deps by
-    // design and no reason to know about `src/extension/`.
-    const REFERENCE_WASM: &[u8] =
-        include_bytes!("../../../src/extension/wasm_fixtures/reference_extension.wasm");
+    fn reference_wasm() -> Vec<u8> {
+        wat::parse_str(
+            r#"(module
+                (func (export "add") (param i64 i64) (result i64)
+                    local.get 0 local.get 1 i64.add)
+                (func (export "busy_loop") (param i64 i64) (result i64)
+                    (loop $forever br $forever)
+                    i64.const 0))"#,
+        )
+        .expect("valid test module")
+    }
 
     #[test]
     fn add_export_computes_correctly() {
         let sandbox = WasmSandbox::new().unwrap();
         let result = sandbox
-            .call_i64_i64_to_i64(REFERENCE_WASM, "add", 2, 3, 1_000_000)
+            .call_i64_i64_to_i64(&reference_wasm(), "add", 2, 3, 1_000_000)
             .expect("add should succeed");
         assert_eq!(result, 5);
     }
@@ -139,14 +143,15 @@ mod tests {
     #[test]
     fn unknown_export_is_a_typed_bad_export_error() {
         let sandbox = WasmSandbox::new().unwrap();
-        let result = sandbox.call_i64_i64_to_i64(REFERENCE_WASM, "does_not_exist", 1, 1, 1_000_000);
+        let result =
+            sandbox.call_i64_i64_to_i64(&reference_wasm(), "does_not_exist", 1, 1, 1_000_000);
         assert!(matches!(result, Err(WasmError::BadExport(_))));
     }
 
     #[test]
     fn busy_loop_exhausts_fuel_instead_of_hanging() {
         let sandbox = WasmSandbox::new().unwrap();
-        let result = sandbox.call_i64_i64_to_i64(REFERENCE_WASM, "busy_loop", 0, 0, 10_000);
+        let result = sandbox.call_i64_i64_to_i64(&reference_wasm(), "busy_loop", 0, 0, 10_000);
         assert!(matches!(result, Err(WasmError::OutOfFuel(10_000))));
     }
 

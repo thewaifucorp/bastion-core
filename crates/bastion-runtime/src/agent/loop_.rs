@@ -15,6 +15,7 @@ use crate::session::SessionManager;
 use crate::types::{
     BastionError, CallConfig, ContentPart, DenyScope, Message, MessageContent, Role, TokenUsage,
 };
+use bastion_types::DeploymentContext;
 use opentelemetry::trace::{Span as _, SpanKind, Tracer as _};
 use opentelemetry::{global as otel_global, KeyValue};
 use std::sync::Arc;
@@ -72,6 +73,9 @@ pub struct AgentLoop {
     pub compactor: AutoCompact,
     pub session_id: String,
     pub daily_budget_usd: f64,
+    /// Immutable deployment authority metadata. Defaults to standalone so
+    /// existing embedders preserve their behavior until they explicitly opt in.
+    pub deployment: DeploymentContext,
     /// P1 `Responder` port — hides persona routing, single/parallel dispatch,
     /// and Cabinet deliberation. `PersonaRegistry` used to be a loop field
     /// (`registry`); it now lives inside the concrete `Responder`
@@ -107,6 +111,7 @@ pub struct AgentLoop {
     pub pending_rx: Option<mpsc::Receiver<PendingItem>>,
     /// Forced persona for the next turn (set by /as command).
     pub forced_persona: Option<String>,
+    pub forced_cabinet: Option<Vec<String>>,
     /// D-11 (Plan 08-01) / SO-03 (Plan 08-08): ordered list of model-name strings tried,
     /// in order, when the primary provider suffers a hard/persistent failure
     /// (`complete_with_fallback_ladder`'s rung 3). Sourced from `AgentConfig.fallback_models`
@@ -243,6 +248,7 @@ impl AgentLoop {
             compactor: AutoCompact::new(),
             session_id,
             daily_budget_usd,
+            deployment: DeploymentContext::default(),
             responder,
             memory,
             goals,
@@ -258,6 +264,7 @@ impl AgentLoop {
             pending_tx,
             pending_rx: Some(pending_rx),
             forced_persona: None,
+            forced_cabinet: None,
             fallback_models,
             failure_sink,
             provider_resolver,
@@ -295,6 +302,13 @@ impl AgentLoop {
     /// calls this only when `[backend]` is actually configured.
     pub fn with_backend_profile(mut self, profile: BackendProfile) -> Self {
         self.backend_profile = profile;
+        self
+    }
+
+    /// Attach neutral deployment metadata without widening the stable
+    /// constructor. Policy enforcement remains an injected product adapter.
+    pub fn with_deployment_context(mut self, deployment: DeploymentContext) -> Self {
+        self.deployment = deployment;
         self
     }
 
@@ -1408,8 +1422,10 @@ impl AgentLoop {
             // cloned (cheap Arc) so the Responder doesn't need a borrow of `self`
             // alongside the `kernel` handle below.
             let forced_persona = self.forced_persona.take();
+            let forced_cabinet = self.forced_cabinet.take();
             let provider = self.provider.clone();
             let responder = self.responder.clone();
+            let deployment = self.deployment.clone();
             let outcome = responder
                 .respond(TurnContext {
                     provider,
@@ -1417,9 +1433,11 @@ impl AgentLoop {
                     history: &mut history,
                     session_id: &session_id,
                     owner,
+                    deployment,
                     user_input,
                     untrusted,
                     forced_persona,
+                    forced_cabinet,
                     turn_span: &mut turn_span,
                 })
                 .await?;
@@ -2170,6 +2188,7 @@ impl AgentLoop {
                 &self.provider,
                 &self.memory,
                 &mut self.forced_persona,
+                &mut self.forced_cabinet,
                 owner,
             )
             .await

@@ -6,11 +6,27 @@
 //! loop is wired to depend on them, but no file moves crate yet — that is a
 //! separate step (3b). Behavior is unchanged; only the seam is added.
 
-use bastion_types::{ApprovalOutcome, ApprovalRow, FailureKind, Goal, PrivacyTier};
+use bastion_types::{
+    ApprovalOutcome, ApprovalRow, DeploymentContext, EffectAudit, EffectContext, FailureKind, Goal,
+    PolicyDecision, PrivacyTier,
+};
 
 use crate::capability::CapabilityRegistry;
 use crate::provider::{Provider, SharedProvider};
 use crate::types::{CallConfig, LlmResponse, Message};
+
+/// Final authority for a requested effect. Managed products inject their
+/// server-side adapter; standalone products may compose a local authority.
+#[async_trait::async_trait]
+pub trait PolicyAuthority: Send + Sync {
+    async fn decide(&self, effect: &EffectContext) -> anyhow::Result<PolicyDecision>;
+}
+
+/// Append-only observer for attempted and completed effects.
+#[async_trait::async_trait]
+pub trait EffectAuditor: Send + Sync {
+    async fn record(&self, audit: &EffectAudit) -> anyhow::Result<()>;
+}
 
 /// P2 — failure telemetry sink.
 ///
@@ -358,6 +374,7 @@ pub trait CommandHandler: Send + Sync {
         provider: &SharedProvider,
         memory: &crate::memory::SharedMemory,
         forced_persona: &mut Option<String>,
+        forced_cabinet: &mut Option<Vec<String>>,
         owner: &str,
     ) -> anyhow::Result<CommandResult>;
 }
@@ -438,6 +455,9 @@ pub struct TurnContext<'a> {
     pub history: &'a mut Vec<Message>,
     pub session_id: &'a str,
     pub owner: &'a str,
+    /// Deployment-level authority context. Generic by design: products supply
+    /// adapters and policy services without exposing their names to the core.
+    pub deployment: DeploymentContext,
     pub user_input: &'a str,
     /// SEC-05/D-09: true when `user_input` originates from an untrusted
     /// source — the `Responder` must genuinely drain/restore the capability
@@ -448,6 +468,7 @@ pub struct TurnContext<'a> {
     /// BEFORE constructing this context — passed by value since it is a
     /// take-once read, never restored.
     pub forced_persona: Option<String>,
+    pub forced_cabinet: Option<Vec<String>>,
     /// SEAM #4: the turn's root OTel span, so the `Responder` can stamp
     /// `gen_ai.agent.name` once the persona is known (matches today's
     /// `turn_span.set_attribute(...)` call site exactly). An OTel

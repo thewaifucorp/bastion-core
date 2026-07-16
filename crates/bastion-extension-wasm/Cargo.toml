@@ -33,3 +33,4 @@ wasmi     = "0.32"
 thiserror = "2"
 
 [dev-dependencies]
+wat = "1"

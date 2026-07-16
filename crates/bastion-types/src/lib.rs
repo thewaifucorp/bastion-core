@@ -9,6 +9,12 @@ pub use secret::{NullSecretResolver, SecretRef, SecretResolver, SecretValue};
 pub mod context_artifact;
 pub use context_artifact::{ContextRevision, StalePolicy, VersionedContextArtifact};
 
+pub mod deployment;
+pub use deployment::{
+    DeploymentContext, DeploymentMode, EffectAudit, EffectContext, PolicyDecision,
+    PolicyDisposition,
+};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,

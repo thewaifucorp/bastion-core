@@ -136,9 +136,11 @@ impl Responder for PersonaResponder {
             history,
             session_id,
             owner,
+            deployment: _,
             user_input,
             untrusted,
             forced_persona,
+            forced_cabinet,
             turn_span,
         } = turn;
 
@@ -156,7 +158,10 @@ impl Responder for PersonaResponder {
             .await?
         };
 
-        if let Some(forced) = forced_persona {
+        if let Some(personas) = forced_cabinet {
+            decision.personas = personas;
+            decision.mode = crate::persona::router::ResponseMode::Cabinet;
+        } else if let Some(forced) = forced_persona {
             decision.personas = vec![forced.clone()];
             decision.mode = crate::persona::router::ResponseMode::Single;
             decision.convene_reason = None;
