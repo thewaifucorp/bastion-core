@@ -1,13 +1,11 @@
 # Security invariants — never regress
 
-> Public reference (M3-02, `BACKLOG.md` §"Invariantes — nunca regredir"). These
-> ten properties are the load-bearing safety guarantees of the Bastion kernel
-> (`bastion-runtime`) and its immediate extensions (`bastion-mcp`,
-> `bastion-memory`). Any change that weakens one of them is a regression,
-> regardless of how it is justified. Each entry names the chokepoint in code
-> that enforces it and the test(s) that would fail first if it broke — see
-> `docs/revamp/M1-07-characterization-map.md` for the full invariant → test
-> inventory this reference draws from.
+> Public reference. These ten properties are the load-bearing safety
+> guarantees of the Bastion kernel (`bastion-runtime`) and its immediate
+> extensions (`bastion-mcp`, `bastion-memory`). Any change that weakens one of
+> them is a regression, regardless of how it is justified. Each entry names
+> the chokepoint in code that enforces it and the test(s) that would fail
+> first if it broke.
 
 ## 1. Single invocation surface
 
@@ -125,7 +123,7 @@ behavior enters as a trait implementation or an MCP server, never as a core
 rewrite that adds a second orchestration mechanism alongside the loop.
 
 - **Chokepoint:** `src/main.rs` (daemon `select!` loop, per-owner `Arc<Mutex<()>>`); `crates/bastion-runtime/src/agent/loop_.rs` (`AgentLoop`, the sole mutable-agent-per-turn abstraction).
-- **Tests:** architectural invariant, verified by design review (`docs/revamp/M1-ADR-substrate-split.md`) and by the crate-dependency CI gate (`scripts/check-crate-deps.sh`) that keeps orchestration-shaped code from re-entering the kernel from an extension crate, rather than by a single runtime assertion.
+- **Tests:** architectural invariant, verified by design review and by the crate-dependency CI gate (`scripts/check-crate-deps.sh`) that keeps orchestration-shaped code from re-entering the kernel from an extension crate, rather than by a single runtime assertion.
 
 ## 11. Authoritative business state stays outside Bastion
 
@@ -137,5 +135,5 @@ expected to commit its own domain state in its own system of record; Bastion
 correlates via a neutral, replay-safe reference (e.g. an OTel-correlatable
 event id), never by owning the record itself.
 
-- **Chokepoint:** `crates/bastion-runtime/src/session/sqlite.rs` (schema is turn/session/memory only — no generic "business object" table); `docs/revamp/A-01-agentruntime-contract.md` (artifact/session separation for delegated runtime sessions).
-- **Tests:** architectural invariant, verified by the M5 embedded-host slice design (no business-entity persistence in the session store) rather than a single runtime assertion; the `embedded-host` example (M3-04) demonstrates the pattern a second consumer follows.
+- **Chokepoint:** `crates/bastion-runtime/src/session/sqlite.rs` (schema is turn/session/memory only — no generic "business object" table).
+- **Tests:** architectural invariant, verified by the embedded-host slice design (no business-entity persistence in the session store) rather than a single runtime assertion; the `embedded-host` example demonstrates the pattern a second consumer follows.

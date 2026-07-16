@@ -1,5 +1,9 @@
 # bastion-core
 
+[![ci](https://github.com/thewaifucorp/bastion-core/actions/workflows/ci.yml/badge.svg)](https://github.com/thewaifucorp/bastion-core/actions/workflows/ci.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![rust](https://img.shields.io/badge/rust-2021_edition-orange.svg)](Cargo.toml)
+
 The **OSS Rust substrate** for building persistent, governable, cognitive AI agents — the stable execution/cognition layer that powers [bastion-agent](https://github.com/thewaifucorp/bastion-agent) and can be embedded by any host.
 
 `bastion-core` is a Cargo workspace of focused crates. It is **mechanism, not orchestrator**: it hosts the agent tool-loop, mediates every tool call through one capability boundary, and injects context/policy through typed seams — it is a host, never a DAG/workflow engine.
@@ -27,7 +31,7 @@ The **OSS Rust substrate** for building persistent, governable, cognitive AI age
 - **Trust follows content** — external/tool content is untrusted; it never gains authority by entering the context.
 - **Owner/session isolation**, typed non-bypassable approval, opaque external context.
 
-The one-way crate-dependency boundary (kernel ← extensions ← consumers, never the reverse) is enforced in CI (`scripts/check-crate-deps.sh`). Security invariants: `docs/SECURITY-INVARIANTS.md`. Public-API stability policy: `docs/VERSIONING.md`.
+The one-way crate-dependency boundary (kernel ← extensions ← consumers, never the reverse) is enforced in CI (`scripts/check-crate-deps.sh`). Security invariants: [docs/SECURITY-INVARIANTS.md](docs/SECURITY-INVARIANTS.md). Public-API stability policy: [docs/VERSIONING.md](docs/VERSIONING.md). Backend support matrix: [docs/SUPPORT-MATRIX.md](docs/SUPPORT-MATRIX.md).
 
 ## Embedding
 
@@ -37,6 +41,13 @@ The one-way crate-dependency boundary (kernel ← extensions ← consumers, neve
 
 - [bastion-agent](https://github.com/thewaifucorp/bastion-agent) — the personal-agent product and flagship consumer.
 
+## Contributing
+
+Source is public; merge rights are restricted to Waifucorp members — issues
+and PR proposals are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for
+the development setup, required checks, code standards, and the
+contribution model. [CHANGELOG.md](CHANGELOG.md) tracks notable changes.
+
 ## License
 
-See [LICENSE](LICENSE). Source-available.
+MIT — see [LICENSE](LICENSE).

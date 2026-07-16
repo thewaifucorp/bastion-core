@@ -1,11 +1,10 @@
 # Bastion — Backend Support Matrix
 
 > **Version: 0.1.0** (matches the `bastion-agent-runtime` crate version every
-> adapter below ships from) · **Generated: 2026-07-14** · Source of truth for
-> *how* each row was measured: `docs/revamp/A-05-conformance-matrix.md`
-> (adapter-level conformance, live-run scorecards) and
-> `docs/revamp/A-06-A-07-live.md` (real daemon-path proofs). This file is the
-> derived, human-facing summary; the linked docs are the raw evidence.
+> adapter below ships from) · **Generated: 2026-07-14**. This file is the
+> derived, human-facing summary of adapter-level conformance and live-run
+> scorecards; the raw evidence is the `tests/agent_runtime_backend_live.rs`
+> suite and each adapter's own integration tests.
 
 ## Read this first: what this table promises, and what it doesn't
 
@@ -28,8 +27,7 @@ guarantee of the Bastion Core. Concretely:
   `HarnessOwned` approvals row means Bastion's `ApprovalGate` genuinely does
   not mediate that harness's tool calls — the UI/cockpit surfaces this
   (`BackendProfile.coverage_note`), it is never hidden.
-- This table is regenerated from real code (`RuntimeDescriptor` +
-  `docs/revamp/A-05-conformance-matrix.md`'s live scorecards), not
+- This table is regenerated from real code and live-run scorecards, not
   hand-maintained prose — if you find a mismatch against the current
   `crates/bastion-agent-runtime/src/{acpx,codex}.rs`, the code wins; file it
   as a docs bug.
@@ -62,20 +60,20 @@ M4-07 acceptance criterion, proved live (`tests/agent_runtime_backend_live.rs::m
 | `acpx_claude` | `DeclaredOnly` | `HarnessOwned` — acpx resolves permission prompts itself from static `--approve-all`/`--deny-all`/`--approve-reads` flags; there is no observed way for Bastion to intercept and answer one | `HarnessOwned` | `Reported` | `None` — acpx passes `--cwd` as a hint only, never an enforced jail |
 | `acpx_opencode` | `DeclaredOnly` | `HarnessOwned` (identical mechanism to `acpx_claude` — the acpx transport, not the wrapped agent, owns this) | `HarnessOwned` | `Reported` | `None` |
 
-**Reading `Bridged` vs `HarnessOwned` as a security property, not just a UX one:** even `Bridged` (Codex) only gates *the specific tool call that asked* — a capable model can retry the same goal through a different, ungated tool call after one denial (documented finding, A-05 §5.5). Bastion's product default (`DenyScope::Turn`) closes this by cancelling the task after a denial rather than letting the harness keep trying — this is enforced at the adapter boundary for every target, independent of `ApprovalCoverage`.
+**Reading `Bridged` vs `HarnessOwned` as a security property, not just a UX one:** even `Bridged` (Codex) only gates *the specific tool call that asked* — a capable model can retry the same goal through a different, ungated tool call after one denial (documented finding). Bastion's product default (`DenyScope::Turn`) closes this by cancelling the task after a denial rather than letting the harness keep trying — this is enforced at the adapter boundary for every target, independent of `ApprovalCoverage`.
 
 ## 4. Conformance status (live, reproducible)
 
-| Target | Status | Scorecard | Source |
-|---|---|---|---|
-| `acpx_claude` | **Done** | 9 passed, 5 skipped, 0 failed | A-05 §2 |
-| `codex_app_server` | **Done** | 9 passed, 3 skipped, 2 failed-by-construction in the default sweep (resolved by a dedicated approval-bridge run: allow ✅, deny ✅ with the T4 caveat above) | A-05 §3 |
-| `acpx_opencode` | **Mostly done** | 8 passed, 5 skipped, 1 failed (`artifact_digest` — `FrameInterpreter`'s tool-call/artifact joining doesn't yet recognize opencode's frame shape; unrelated to auth) | A-05 §2A |
-| `codex` via `acpx` (3-way comparison cell) | **Unavailable** | The ACP bridge only advertises `gpt-5.3-codex*`/non-codex models, and the Codex backend rejects that family under ChatGPT-subscription auth — a login-mode mismatch external to both adapters, not something Bastion can route around | A-05 §4 |
+| Target | Status | Scorecard |
+|---|---|---|
+| `acpx_claude` | **Done** | 9 passed, 5 skipped, 0 failed |
+| `codex_app_server` | **Done** | 9 passed, 3 skipped, 2 failed-by-construction in the default sweep (resolved by a dedicated approval-bridge run: allow ✅, deny ✅ with the T4 caveat above) |
+| `acpx_opencode` | **Mostly done** | 8 passed, 5 skipped, 1 failed (`artifact_digest` — `FrameInterpreter`'s tool-call/artifact joining doesn't yet recognize opencode's frame shape; unrelated to auth) |
+| `codex` via `acpx` (3-way comparison cell) | **Unavailable** | The ACP bridge only advertises `gpt-5.3-codex*`/non-codex models, and the Codex backend rejects that family under ChatGPT-subscription auth — a login-mode mismatch external to both adapters, not something Bastion can route around |
 
 ## 5. Delegated tasks (mode 3 — `task_runtime`, independent of the conversation backend)
 
-Any target above that supports `start()` can serve as a delegated-task runtime regardless of what the CONVERSATION backend is (a `Model`-conversation owner can still delegate a coding task to `codex_app_server`, for example). Resume-after-restart for an **in-flight** delegated task is a known, disclosed protocol gap (A-06/A-07 live doc, finding "6b"): `AgentRuntime::resume` reattaches the harness SESSION, not the specific task that was running — neither `acpx` nor `codex app-server`'s own protocol buffers/replays events across a real process restart. `acpx` additionally cannot serve the resume leg at all (`supports.resume = false`); `codex_app_server` can.
+Any target above that supports `start()` can serve as a delegated-task runtime regardless of what the CONVERSATION backend is (a `Model`-conversation owner can still delegate a coding task to `codex_app_server`, for example). Resume-after-restart for an **in-flight** delegated task is a known, disclosed protocol gap: `AgentRuntime::resume` reattaches the harness SESSION, not the specific task that was running — neither `acpx` nor `codex app-server`'s own protocol buffers/replays events across a real process restart. `acpx` additionally cannot serve the resume leg at all (`supports.resume = false`); `codex_app_server` can.
 
 ## 6. How to select a backend
 

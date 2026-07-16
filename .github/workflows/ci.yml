@@ -4,7 +4,7 @@ on:
   pull_request:
   push:
     branches:
-      - gsd/v1.0-milestone
+      - main
 
 jobs:
   crate-deps:

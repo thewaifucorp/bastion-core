@@ -1,22 +1,24 @@
 # Versioning policy
 
-Bastion is a Cargo workspace with three tiers of crate, each with a
-different versioning contract. All are pre-1.0 today; this document says
-what "pre-1.0" is allowed to mean here, and what changes once a crate
-crosses 1.0.
+This repo (`bastion-core`) is a Cargo workspace with two tiers of crate,
+each with a different versioning contract. Both are pre-1.0 today; this
+document says what "pre-1.0" is allowed to mean here, and what changes once
+a crate crosses 1.0. A third tier — the **App** — is the product version of
+[bastion-agent](https://github.com/thewaifucorp/bastion-agent), which
+consumes these crates as a dependency; it is bumped on releases, not on API
+shape, and is out of scope for this document.
 
-## The three tiers
+## The two tiers
 
 | Tier | Crates | Contract |
 |---|---|---|
 | **Kernel** | `bastion-types`, `bastion-runtime`, `bastion-memory` | Strict semver **once at 1.0**. Pre-1.0: see below. |
 | **Extensions** | `bastion-providers`, `bastion-mcp`, `bastion-agent-runtime`, `bastion-cognition`, `bastion-personas`, `bastion-mesh` | Semver-shaped but looser: 0.x for the foreseeable future, breaking changes land on a minor bump with a migration note (§3). |
-| **App** | `bastion` (the root package: the binary + its product-level modules `agent::{command,skills}`, `api`, `channel`, `config`, `mcp::server`) | **Product version**, not a library contract. Bumped on releases, not on API shape. Nothing outside this repo links against it as a library — `examples/*` and every other consumer import the kernel/extension crates directly, never `bastion` (enforced by `scripts/check-crate-deps.sh` and the `examples` CI job). |
 
 The kernel/extension split, the dependency allowlist between them, and the
-rationale for which crate hosts what all come from
-`docs/revamp/M1-ADR-substrate-split.md` — this document only covers the
-version-number contract on top of that split.
+rationale for which crate hosts what are enforced by
+`scripts/check-crate-deps.sh` — this document only covers the version-number
+contract on top of that split.
 
 ## 1. Pre-1.0 rule (today)
 
@@ -33,9 +35,6 @@ workspace follows that convention literally:
 - Each crate's version is independent — a breaking change to
   `bastion-mesh` does not force a version bump in `bastion-types` unless
   `bastion-mesh`'s own dependency on it actually changed.
-- The `bastion` app package's version is a product/release number and is
-  exempt from this rule (see the App row above) — it is bumped by whatever
-  the release process decides, independent of any crate's semver events.
 
 **Public API** here means: everything in `docs/api-baseline/<crate>.txt`
 (§2). `pub(crate)` items are never part of the contract; moving an item
@@ -88,8 +87,8 @@ Every breaking change (an item removed/renamed without having gone through
 crate, a visibility downgrade of something in the baseline) must ship with
 a migration note in the same PR: what broke, the old call site, the new
 call site. Put it in the PR description and, if the change is significant
-enough to need one, a short section in the relevant crate's doc comment or
-in `docs/revamp/` pointing at the decision. "Bump the version" without a
+enough to need one, a short design note in the relevant crate's doc comment
+pointing at the decision. "Bump the version" without a
 migration note is not sufficient — the version number tells a consumer
 *that* something broke, the note tells them *what to do about it*.
 
@@ -112,6 +111,4 @@ Once a kernel crate ships `1.0.0`, normal semver takes over for it:
 crates are expected to stay 0.x well past the kernel's 1.0 (they are where
 new, less-settled surface continues to land); each is free to make its own
 1.0 call independently once its own contract has proven stable in
-practice. The `bastion` app package's version never adopts library semver
-— it stays a product/release number under §1's App row regardless of what
-tier 1.0 the kernel or extensions reach.
+practice.

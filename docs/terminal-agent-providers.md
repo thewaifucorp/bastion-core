@@ -1,7 +1,7 @@
 # Terminal-agent providers (Claude Code / opencode)
 
-> **DEPRECADO (A-09, `docs/revamp/BACKLOG.md`):** substituído por `AgentRuntime`
-> (`bastion-agent-runtime`'s `CodexAppServerRuntime`/`AcpxAgentRuntime`, A-03/A-04) —
+> **DEPRECADO:** substituído por `AgentRuntime`
+> (`bastion-agent-runtime`'s `CodexAppServerRuntime`/`AcpxAgentRuntime`) —
 > sessão estruturada, eventos reais, sem bypass de egress/approval/budget. Este provider
 > agora só compila com a Cargo feature `legacy-terminal-agent` (**OFF por default** —
 > `cargo build --features legacy-terminal-agent`, ou no crate isolado
