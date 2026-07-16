@@ -4,9 +4,7 @@ struct adapters.rs:NlCommandAdapter
 fn adapters.rs:new
 struct client.rs:McpClient
 fn client.rs:call_tool_with_timeout
-fn client.rs:connect_all
 fn client.rs:connect_from_config
-fn client.rs:load_mcp_config
 fn client.rs:registry
 fn client.rs:with_composio_oauth
 use lib.rs:*
@@ -38,7 +36,6 @@ fn registry.rs:is_trusted
 fn registry.rs:list_tool_names
 fn registry.rs:needs_approval
 fn registry.rs:new
-fn registry.rs:register
 fn registry.rs:register_with_schema
 fn registry.rs:server_for
 fn registry_setup.rs:register_mcp_tools

@@ -13,7 +13,7 @@ shape, and is out of scope for this document.
 | Tier | Crates | Contract |
 |---|---|---|
 | **Kernel** | `bastion-types`, `bastion-runtime`, `bastion-memory` | Strict semver **once at 1.0**. Pre-1.0: see below. |
-| **Extensions** | `bastion-providers`, `bastion-mcp`, `bastion-agent-runtime`, `bastion-cognition`, `bastion-personas`, `bastion-mesh`, `bastion-extension-protocol`, `bastion-extension-wasm` | Semver-shaped but looser: 0.x for the foreseeable future, breaking changes land on a minor bump with a migration note (§3). |
+| **Extensions** | `bastion-providers`, `bastion-mcp`, `bastion-agent-runtime`, `bastion-cognition`, `bastion-personas`, `bastion-mesh`, `bastion-extension-protocol`, `bastion-extension-wasm` | Semver-shaped but looser: 0.x for the foreseeable future; breaking changes land on a minor bump. |
 
 The kernel/extension split, the dependency allowlist between them, and the
 rationale for which crate hosts what are enforced by
@@ -61,38 +61,16 @@ of the list), but every item's presence, name, and top-level visibility.
 - A baseline diff is not automatically a version bump by itself (adding a
   new `pub fn` is additive, not breaking) — but every diff should be read
   against §1/§3 before committing: does this line disappearing, appearing,
-  or changing kind mean a version bump and/or a migration note?
+  or changing kind mean a version bump and changelog entry?
 
-## 3. Deprecation policy
+## 3. Breaking changes
 
-Removing or renaming a public item is a two-step process, not a single
-commit:
+Removing or renaming a public item, changing a public signature, moving a
+type between crates, or reducing visibility is a breaking change. Bump the
+affected pre-1.0 crate's minor version and describe the changed contract in
+the PR and changelog.
 
-1. **Warn** (patch or minor release): mark the item `#[deprecated(since =
-   "…", note = "…")]` pointing at its replacement. It keeps working. This
-   release's changelog/PR calls out the deprecation explicitly.
-2. **Remove** (the *next* release that touches that crate, minimum):
-   delete the deprecated item. This is the breaking change — bump the
-   crate's minor version (§1) and write the migration note (below).
-
-A deprecation cannot be introduced and removed in the same release. There
-is no fixed calendar window (this project does not run on a release train
-yet) — "the next release" is the next version bump of that specific crate,
-whatever triggers it.
-
-## 4. Breaking changes require a migration note
-
-Every breaking change (an item removed/renamed without having gone through
-§3, a trait's method signature changing, a type moving to a different
-crate, a visibility downgrade of something in the baseline) must ship with
-a migration note in the same PR: what broke, the old call site, the new
-call site. Put it in the PR description and, if the change is significant
-enough to need one, a short design note in the relevant crate's doc comment
-pointing at the decision. "Bump the version" without a
-migration note is not sufficient — the version number tells a consumer
-*that* something broke, the note tells them *what to do about it*.
-
-## 5. MSRV
+## 4. MSRV
 
 Minimum Supported Rust Version tracks whatever toolchain this repository's
 CI currently builds with — **no explicit lower bound is promised below
@@ -102,7 +80,7 @@ to any crate's semver (consistent with most of the pre-1.0 Rust ecosystem);
 it is called out in the PR that bumps it so downstream consumers on an
 older toolchain notice.
 
-## 6. What changes at 1.0
+## 5. What changes at 1.0
 
 Once a kernel crate ships `1.0.0`, normal semver takes over for it:
 `MAJOR.MINOR.PATCH` where only `MAJOR` may break, `MINOR` is additive-only,

@@ -242,14 +242,7 @@ mod tests {
             Some(PrivacyTier::LocalOnly),
         )
         .await;
-        store_procedural(
-            &mem,
-            "_local",
-            "untagged legacy procedural belief",
-            None,
-            None,
-        )
-        .await;
+        store_procedural(&mem, "_local", "untagged procedural belief", None, None).await;
 
         let provider = ProceduralBeliefProvider::new(mem);
         let blocks = provider.context_for_turn("_local", "hello", None).await;
@@ -267,8 +260,8 @@ mod tests {
         assert!(!cloud.content.contains("deploy key rotation"));
         assert!(local.content.contains("deploy key rotation"));
         // Deny-on-ambiguity: NULL tier must land in the LocalOnly block, never CloudOk.
-        assert!(local.content.contains("untagged legacy procedural belief"));
-        assert!(!cloud.content.contains("untagged legacy procedural belief"));
+        assert!(local.content.contains("untagged procedural belief"));
+        assert!(!cloud.content.contains("untagged procedural belief"));
     }
 
     #[tokio::test]

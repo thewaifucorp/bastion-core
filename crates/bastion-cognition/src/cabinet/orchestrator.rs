@@ -236,7 +236,7 @@ mod tests {
             })
         }
         async fn complete_simple(&self, prompt: &str) -> anyhow::Result<String> {
-            // Kept for backward compatibility — extract name from prompt lines.
+            // Extract the persona name from the simple-completion prompt.
             let name = prompt
                 .lines()
                 .find(|l| l.starts_with("You are "))

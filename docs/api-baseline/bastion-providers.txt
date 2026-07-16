@@ -14,7 +14,6 @@ mod lib.rs:ollama
 mod lib.rs:openai
 mod lib.rs:openrouter
 mod lib.rs:registry
-mod lib.rs:terminal_agent
 mod lib.rs:types
 fn ollama.rs:new
 fn openai.rs:new
@@ -24,5 +23,3 @@ struct registry.rs:RegistryProviderResolver
 fn registry.rs:resolve_provider
 fn registry.rs:resolve_provider_kind
 fn registry.rs:resolve_reflector_provider
-struct terminal_agent.rs:TerminalAgentProvider
-fn terminal_agent.rs:new

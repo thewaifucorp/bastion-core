@@ -11,13 +11,9 @@ use delta::DeltaOp;
 use std::sync::Arc;
 use tokio::time::{interval, Duration, MissedTickBehavior};
 
-/// Config section for the offline Reflector (LEARN-02/LEARN-05). Moved here
-/// from `src/config.rs` (M2 step 6, V2 fix — `docs/ARCHITECTURE.md`):
-/// this crate (an extension) never reads the app's global `bastion.toml`
-/// format directly — the app parses `[reflector]` into this type and injects
-/// it via `Reflector::new`'s constructor param (unchanged). `src/config.rs`
-/// re-exports this under its old path so `BastionConfig.reflector` keeps
-/// compiling unchanged.
+/// Host-supplied configuration for the offline Reflector. This crate never
+/// reads an application's global configuration format directly; the host
+/// parses its settings and injects this value through `Reflector::new`.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct ReflectorConfig {
     /// Hard cost cap per Reflector tick (ADR D-4 "budget duro"). Default: $0.10.

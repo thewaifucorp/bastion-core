@@ -199,12 +199,10 @@ async fn codex_conformance_live_approval_bridge() {
     );
 }
 
-/// Ciclo 2.2 re-validation smoke (A-01 v2 contract review): minimal,
-/// budget-conscious live proof of the two checks this cycle actually
-/// changed for `CodexAppServerRuntime` — NOT the full 14-check sweep (that
-/// stays covered by `codex_conformance_live_trusted` above).
+/// Budget-conscious live proof of happy-path and resume behavior. The full
+/// conformance sweep remains in `codex_conformance_live_trusted` above.
 ///
-/// 1. `happy_path`, re-run against the v2 contract shape.
+/// 1. `happy_path` against the current contract.
 /// 2. Genuine `resume()` with a real [`ResumeSpec`] (A-05 §5.6): start a
 ///    session, drop it (kills the app-server process via `kill_on_drop`),
 ///    resume the same thread id on a brand-new process, submit one more
@@ -214,7 +212,7 @@ async fn codex_conformance_live_approval_bridge() {
 ///    docs).
 #[tokio::test]
 #[ignore = "spawns real codex app-server subprocesses; run manually with --ignored"]
-async fn codex_v2_resume_smoke() {
+async fn codex_resume_smoke() {
     let workspace = tempfile::tempdir().expect("tempdir");
     let spec = make_spec(
         workspace.path().to_path_buf(),

@@ -61,26 +61,6 @@ impl ToolRegistry {
         );
     }
 
-    /// Backward-compat: register without schema (schema defaults to empty object).
-    pub fn register(&mut self, server_label: &str, tool_names: Vec<String>, is_local: bool) {
-        for name in tool_names {
-            self.tool_index.insert(
-                name,
-                ToolEntry {
-                    server_label: server_label.to_owned(),
-                    input_schema: serde_json::json!({"type": "object", "properties": {}}),
-                    description: String::new(),
-                    is_local,
-                    // `register()` is the legacy/backward-compat path with no per-tool
-                    // annotation or per-server trust data available — safe defaults
-                    // matching the accessors' own documented conventions below.
-                    needs_approval: false,
-                    trusted: false,
-                },
-            );
-        }
-    }
-
     /// SORTED by tool name (COST-01/D-14b prerequisite, twin of
     /// `CapabilityRegistry::list_tool_defs`): `self.tool_index` is a `HashMap`, whose
     /// iteration order is unspecified and can shift turn-over-turn even when the
@@ -98,7 +78,7 @@ impl ToolRegistry {
             .map(|e| e.server_label.as_str())
     }
 
-    /// Return the full input_schema for a tool (populated at connect_all time).
+    /// Return the full input schema recorded when the tool was registered.
     pub fn get_tool_schema(&self, tool_name: &str) -> Option<&Value> {
         self.tool_index.get(tool_name).map(|e| &e.input_schema)
     }

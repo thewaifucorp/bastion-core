@@ -34,7 +34,7 @@ impl PersonaRegistry {
 
     /// Scan `root/personas/<name>/SOUL.md` and build the registry.
     ///
-    /// Mirrors `load_mcp_config`'s tolerance:
+    /// Missing directories and malformed entries are handled independently:
     /// - If `personas/` does not exist → returns an empty registry (not an error).
     /// - Malformed SOUL.md files are skipped with `tracing::warn!` (PERS-07).
     pub async fn load_dir(root: &str) -> anyhow::Result<Self> {

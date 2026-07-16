@@ -30,7 +30,7 @@ pub struct DeploymentContext {
     /// Stable worker/deployment identity when a control plane hosts this loop.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker_id: Option<String>,
-    /// Effective external policy revision for observability and compatibility.
+    /// Effective external policy revision for observability and correlation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_revision: Option<String>,
 }

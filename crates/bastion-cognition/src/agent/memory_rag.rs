@@ -216,7 +216,7 @@ mod tests {
             Some(PrivacyTier::LocalOnly),
         )
         .await;
-        store(&mem, "_local", "untagged legacy belief", None, None).await;
+        store(&mem, "_local", "untagged belief", None, None).await;
 
         let provider = MemoryRagProvider::new(mem);
         let blocks = provider.context_for_turn("_local", "hello", None).await;
@@ -234,8 +234,8 @@ mod tests {
         assert!(!cloud.content.contains("medical condition"));
         assert!(local.content.contains("medical condition X"));
         // Deny-on-ambiguity: NULL tier must land in the LocalOnly block, never CloudOk.
-        assert!(local.content.contains("untagged legacy belief"));
-        assert!(!cloud.content.contains("untagged legacy belief"));
+        assert!(local.content.contains("untagged belief"));
+        assert!(!cloud.content.contains("untagged belief"));
     }
 
     #[tokio::test]

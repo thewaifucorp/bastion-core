@@ -78,9 +78,8 @@ Scope is usually the crate name minus the `bastion-` prefix (e.g.
 
 ## Breaking changes
 
-See [docs/VERSIONING.md](docs/VERSIONING.md) §3–4: a public API removal
-goes through a deprecation cycle, and every breaking change ships a
-migration note in the PR description.
+Describe every breaking public API change in the PR and changelog and bump
+the affected crate according to [docs/VERSIONING.md](docs/VERSIONING.md).
 
 ## Security
 

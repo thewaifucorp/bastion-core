@@ -9,17 +9,6 @@ unsafe_code = "forbid"
 [lints.clippy]
 all = "warn"
 
-# A-09 (docs/ARCHITECTURE.md): the terminal-agent provider (`claude -p`/opencode via
-# stdout — achata mensagens em prompt, não preserva sessão/eventos, deixa tools internas
-# do CLI escaparem de egress/approval/budget) is legacy compatibility bridge, superseded by
-# the proven `AgentRuntime` substitute (A-03/A-04, `bastion-agent-runtime`). Feature-gated
-# OFF by default per the A-09 decision (flag FIRST, not removed) — a default build never
-# links `TerminalAgentProvider`; the code stays available for one deprecation window behind
-# this flag, never deleted here.
-[features]
-default = []
-legacy-terminal-agent = []
-
 # Versions identical to the workspace root — the crate carries only what the
 # moved files actually use (audited import-by-import in M2 step 5).
 [dependencies]

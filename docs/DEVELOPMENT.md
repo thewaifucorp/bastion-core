@@ -50,7 +50,7 @@ Before opening a pull request:
 
 1. Run every command in the required-checks section of [CONTRIBUTING.md](../CONTRIBUTING.md).
 2. Update the API baseline if a public item changed.
-3. Add a migration note for a breaking change.
+3. Document a breaking public API change in the PR and changelog.
 4. Explain which crates changed and what reviewers should focus on using the repository PR template.
 
 External design work should begin as an issue; merge rights and proposal handling are described in [CONTRIBUTING.md](../CONTRIBUTING.md).

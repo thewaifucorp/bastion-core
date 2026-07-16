@@ -51,10 +51,6 @@ The workspace uses crates from the Rust package ecosystem. Restore registry/netw
 
 The default `cargo test` skips tests marked `#[ignore]`. Do not add `--ignored` unless you intend to run a real Codex, Claude, or OpenCode subprocess with the required host authentication. See [TESTING.md](TESTING.md).
 
-### `legacy-terminal-agent` examples or imports are unavailable
-
-The deprecated terminal provider is feature-gated and off by default. New integrations should use `bastion-agent-runtime`; see [terminal-agent-providers.md](terminal-agent-providers.md).
-
 ## Next steps
 
 - [Architecture](ARCHITECTURE.md) explains the crate boundaries and turn flow.

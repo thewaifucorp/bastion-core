@@ -2,9 +2,8 @@
 //! that must never dispatch without explicit owner confirmation (irreversible
 //! or destructive actions).
 //!
-//! This is the real mechanism behind `CapabilityRegistry::invoke()`'s Policy 2 —
-//! replacing the permanent fail-closed `bail!` that existed since project
-//! inception. It mirrors two established conventions in this codebase:
+//! This is the mechanism behind `CapabilityRegistry::invoke()`'s approval policy.
+//! It follows two conventions in this codebase:
 //! - The sqlite access idiom used throughout `memory/sqlite.rs`/`session/sqlite.rs`:
 //!   `task::spawn_blocking` + `Connection::open` + `PRAGMA journal_mode=WAL;
 //!   PRAGMA busy_timeout=5000;`.
@@ -15,13 +14,9 @@
 //! The `approval_queue` table itself was created in Plan 11-01
 //! (`src/session/sqlite.rs::init_schema`).
 //!
-//! Ciclo 2.1 (`docs/SECURITY-INVARIANTS.md` §1): `ApprovalStatus`,
-//! `ApprovalRow`, `ApprovalOutcome` moved to `bastion-types` (pure vocabulary,
-//! no SQLite logic) and re-exported here under their old path. `ApprovalQueue`
-//! is renamed `SqliteApprovalGate` and implements the `ApprovalGate` port
-//! (`agent::ports`) — same logic, now behind the trait a second consumer can
-//! implement. `NullApprovalGate` is the explicit fail-closed default that
-//! replaces the old `Option::None` "no queue wired" state.
+//! Approval vocabulary lives in `bastion-types`; `SqliteApprovalGate`
+//! implements the host-replaceable `ApprovalGate` port. `NullApprovalGate`
+//! is the explicit fail-closed default.
 
 use crate::agent::ports::ApprovalGate;
 pub use bastion_types::{ApprovalOutcome, ApprovalRow, ApprovalStatus, DenyScope};

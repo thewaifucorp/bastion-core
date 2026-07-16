@@ -32,7 +32,7 @@ These are the security properties implemented by this workspace. An embedding ho
 - **Code:** `crates/bastion-runtime/src/capability/registry.rs`
 - **Evidence:** local and non-local tagged-value tests.
 
-Direct `ToolSource` fallback paths do not have a `Capability` instance and therefore treat results as untrusted. They are explicit compatibility paths, not a way to claim trusted locality.
+Direct `ToolSource` paths do not have a `Capability` instance and therefore treat results as untrusted. They cannot claim trusted locality.
 
 ## 5. Owner-scoped state rejects cross-owner access
 

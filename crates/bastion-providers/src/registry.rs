@@ -1,5 +1,3 @@
-#[cfg(feature = "legacy-terminal-agent")]
-use super::terminal_agent::TerminalAgentProvider;
 use super::{
     anthropic::AnthropicProvider, gemini::GeminiProvider, groq::GroqProvider,
     ollama::OllamaProvider, openai::OpenAIProvider, openrouter::OpenRouterProvider, Provider,
@@ -9,38 +7,11 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 pub fn resolve_provider(model_name: &str) -> anyhow::Result<Box<dyn Provider>> {
-    // Exact match BEFORE the `claude` prefix check — "claude_code" must not hit Anthropic
-    // ("claude_code".starts_with("claude") is true, so without this branch it would silently
-    // misroute to AnthropicProvider with an invalid model id).
-    //
-    // A-09: the terminal-agent bridge is feature-gated (`legacy-terminal-agent`, off by
-    // default). With the feature ON, behavior is byte-identical to before this gate existed.
-    // With the feature OFF (the default build from now on), these two model names fail
-    // closed with a typed, explanatory error instead of silently falling through to the
-    // wrong provider or linking the deprecated bridge.
-    #[cfg(feature = "legacy-terminal-agent")]
-    {
-        if model_name == "claude_code" {
-            return Ok(Box::new(TerminalAgentProvider::new(
-                "claude",
-                "claude_code",
-            )));
-        } else if model_name == "opencode" {
-            return Ok(Box::new(TerminalAgentProvider::new("opencode", "opencode")));
-        }
-    }
-    #[cfg(not(feature = "legacy-terminal-agent"))]
-    {
-        if model_name == "claude_code" || model_name == "opencode" {
-            anyhow::bail!(
-                "model '{model_name}' requires the deprecated terminal-agent provider, which is \
-                 compiled out of this build (A-09: gated behind the 'legacy-terminal-agent' \
-                 Cargo feature, off by default). Use an AgentRuntime backend instead \
-                 (bastion-agent-runtime's CodexAppServerRuntime/AcpxAgentRuntime, A-03/A-04) \
-                 — the proven substitute — or rebuild bastion-providers with \
-                 `--features legacy-terminal-agent` if you must keep the legacy bridge."
-            );
-        }
+    if model_name == "claude_code" || model_name == "opencode" {
+        anyhow::bail!(
+            "'{model_name}' is an external agent runtime id, not a model provider; \
+             register it through bastion-agent-runtime"
+        );
     }
 
     if model_name.starts_with("claude") {
@@ -106,7 +77,7 @@ pub fn resolve_reflector_provider(
 #[doc(hidden)]
 pub fn resolve_provider_kind(model_name: &str) -> &'static str {
     if model_name == "claude_code" || model_name == "opencode" {
-        "terminal_agent"
+        "agent_runtime"
     } else if model_name.starts_with("claude") {
         "anthropic"
     } else if model_name.starts_with("gpt")
@@ -155,43 +126,21 @@ mod tests {
     }
 
     #[test]
-    fn resolve_provider_kind_terminal_agent() {
-        // Purely descriptive labeling — unaffected by the `legacy-terminal-agent` feature
-        // gate below, since it never constructs a provider.
-        assert_eq!(resolve_provider_kind("claude_code"), "terminal_agent"); // not "anthropic"
-        assert_eq!(resolve_provider_kind("opencode"), "terminal_agent");
+    fn resolve_provider_kind_agent_runtime() {
+        assert_eq!(resolve_provider_kind("claude_code"), "agent_runtime");
+        assert_eq!(resolve_provider_kind("opencode"), "agent_runtime");
     }
 
-    // A-09: default build (feature OFF) must fail closed with a typed, explanatory error
-    // instead of silently misrouting "claude_code"/"opencode" to the wrong provider.
-    #[cfg(not(feature = "legacy-terminal-agent"))]
     #[test]
-    fn resolve_provider_without_legacy_feature_fails_closed_on_terminal_agent_models() {
-        // `Box<dyn Provider>` isn't `Debug`, so `Result::expect_err` can't be used directly —
-        // match instead.
+    fn resolve_provider_rejects_agent_runtime_ids() {
         match resolve_provider("claude_code") {
-            Err(e) => assert!(e.to_string().contains("legacy-terminal-agent")),
-            Ok(_) => panic!(
-                "default build (no legacy-terminal-agent feature) must not resolve claude_code"
-            ),
+            Err(e) => assert!(e.to_string().contains("external agent runtime id")),
+            Ok(_) => panic!("claude_code must not resolve as a model provider"),
         }
         match resolve_provider("opencode") {
-            Err(e) => assert!(e.to_string().contains("legacy-terminal-agent")),
-            Ok(_) => {
-                panic!("default build (no legacy-terminal-agent feature) must not resolve opencode")
-            }
+            Err(e) => assert!(e.to_string().contains("external agent runtime id")),
+            Ok(_) => panic!("opencode must not resolve as a model provider"),
         }
-    }
-
-    // A-09: with the feature explicitly enabled, behavior is unchanged from before the gate
-    // (`cargo test -p bastion-providers --features legacy-terminal-agent`).
-    #[cfg(feature = "legacy-terminal-agent")]
-    #[test]
-    fn resolve_provider_with_legacy_feature_still_builds_terminal_agent_provider() {
-        resolve_provider("claude_code")
-            .expect("legacy-terminal-agent feature must still resolve claude_code");
-        resolve_provider("opencode")
-            .expect("legacy-terminal-agent feature must still resolve opencode");
     }
 
     #[test]

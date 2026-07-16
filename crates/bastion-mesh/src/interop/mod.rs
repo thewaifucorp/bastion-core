@@ -5,17 +5,9 @@ use serde::{Deserialize, Serialize};
 
 pub const AF_VERSION: u32 = 1;
 
-/// Loop 3-D (`docs/ARCHITECTURE.md`): "`.af` versionado
-/// (INTEROP-01 já existe) + `schema_version` + id do produtor". `version`
-/// below has served as the schema version since INTEROP-01 shipped (checked
-/// by `check_version`) — kept as-is rather than renamed (a rename would
-/// break every `.af` file already exported by a pre-Loop-3-D binary, a
-/// legacy-export-format break this loop deliberately does not make). This
-/// constant is the NEW addition: which product produced the file, so a
-/// FUTURE second producer of the same `.af` format is distinguishable from
-/// this one — `#[serde(default)]` on `AgentFile::producer` below keeps every
-/// pre-Loop-3-D exported file importable unchanged (missing field ⇒ this
-/// default, never a hard parse failure).
+/// Producer identifier written into `.af` interchange files. `version`
+/// identifies the schema while this value distinguishes the producing host.
+/// A missing producer field resolves to this value.
 pub const PRODUCER_ID: &str = "bastion";
 
 fn default_producer() -> String {

@@ -5,11 +5,6 @@ pub mod ollama;
 pub mod openai;
 pub mod openrouter;
 pub mod registry;
-// A-09: legacy terminal-agent bridge, feature-gated off by default — see the
-// `legacy-terminal-agent` feature doc comment in Cargo.toml. Not removed, not linked into a
-// default build.
-#[cfg(feature = "legacy-terminal-agent")]
-pub mod terminal_agent;
 
 /// Internal alias so the files moved verbatim from the monolith keep their
 /// `crate::types::...` import paths compiling unchanged. The actual types
@@ -185,7 +180,7 @@ pub(crate) fn build_openai_messages(
                         }
                     }
                 } else {
-                    // Fallback for legacy text-only tool messages (no id available).
+                    // Text-only tool messages have no call id.
                     out.push(ChatCompletionRequestMessage::User(
                         ChatCompletionRequestUserMessage {
                             content: ChatCompletionRequestUserMessageContent::Text(content_text(

@@ -21,47 +21,8 @@ pub struct McpClient {
     composio_oauth: Option<std::sync::Arc<crate::oauth::ComposioOAuth>>,
 }
 
-pub fn load_mcp_config(path: &str) -> anyhow::Result<Value> {
-    match std::fs::read_to_string(path) {
-        Ok(content) => {
-            let v: Value = serde_json::from_str(&content)
-                .map_err(|e| anyhow::anyhow!("failed to parse mcp-servers.json: {}", e))?;
-            Ok(v)
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            Ok(serde_json::json!({"mcpServers": {}}))
-        }
-        Err(e) => Err(anyhow::anyhow!(
-            "failed to read mcp config at {}: {}",
-            path,
-            e
-        )),
-    }
-}
-
 impl McpClient {
-    /// Legacy: connect from a mcp-servers.json file path. Kept for compatibility/tests.
-    /// Runtime uses [`connect_from_config`] (bastion.toml `[mcp.servers]`, D-09).
-    pub async fn connect_all(config_path: &str) -> anyhow::Result<Self> {
-        let config = load_mcp_config(config_path)?;
-        match config.get("mcpServers").and_then(|v| v.as_object()) {
-            Some(obj) => Self::connect_from_servers_obj(obj).await,
-            None => {
-                tracing::warn!(
-                    "mcp config has no 'mcpServers' object — starting with empty registry"
-                );
-                Ok(McpClient {
-                    servers: Vec::new(),
-                    registry: ToolRegistry::new(),
-                    composio_oauth: None,
-                })
-            }
-        }
-    }
-
-    /// Connect from `bastion.toml [mcp.servers]` (D-09) — the runtime path. The legacy
-    /// `.bastion/mcp-servers.json` file is no longer required (and isn't mounted in the
-    /// FROM-scratch container, which is why MCP tools were silently absent before).
+    /// Connect from the host application's typed MCP server configuration.
     pub async fn connect_from_config(
         servers: &std::collections::HashMap<String, crate::types::McpServerEntry>,
     ) -> anyhow::Result<Self> {
@@ -105,7 +66,7 @@ impl McpClient {
                 .unwrap_or("sse");
             // Plan 10-08: typed, operator-controlled locality flag from
             // `[mcp.servers.*].is_local` — defaults to false (fail-closed) for any
-            // server config that omits it (legacy mcp-servers.json path).
+            // server config that omits it.
             let is_local = server_cfg
                 .get("is_local")
                 .and_then(|v| v.as_bool())

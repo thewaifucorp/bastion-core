@@ -5,8 +5,7 @@
 //! **session** whose external harness runs its own internal tool loop
 //! (terminal, files, tools, artifacts) and reports structured events back.
 //!
-//! Replaces the legacy `TerminalAgentProvider` stdout bridge. Adapters
-//! (native app-server, supervised ACP client) live outside the kernel and
+//! Adapters (native app-server, supervised ACP client) live outside the kernel and
 //! must pass the conformance suite in [`conformance`]. The kernel never
 //! names a concrete harness.
 //!
@@ -21,27 +20,10 @@
 //!   any content reaches the harness;
 //! - auth is an opaque [`AuthProfileRef`]; errors never carry secrets.
 //!
-//! # v2 (Ciclo 2.2 — contract review against 6 live-validation findings)
-//!
-//! `docs/SUPPORT-MATRIX.md` §5 found six gaps by actually
-//! running the suite against real harnesses. This revision closes them:
-//! 1. [`conformance::ConformanceScenarios::watchdog`] replaces the
-//!    crate-wide `const WATCHDOG` — live cloud adapters need a longer bound
-//!    than the embedded fake.
-//! 2. [`SandboxCoverage`] is now detected (probed in `health()`/`start()`),
-//!    never a hardcoded per-adapter constant — see [`crate::codex`].
-//! 3. [`AgentRuntime::resume`] now takes a [`ResumeSpec`] — the re-appliable
-//!    subset of [`SessionSpec`] (timeout/permissions/env; workspace/sandbox
-//!    stay fixed to the original session).
-//! 4. [`PermissionDecision::Deny`] carries a [`DenyScope`], mirroring the
-//!    kernel's `bastion_types::DenyScope` (`docs/SECURITY-INVARIANTS.md`
-//!    §3): `Turn` makes the adapter cancel the task gracefully after
-//!    denying, closing the "deny one tool call, model reroutes through
-//!    another" gap (A-05 §5.5) at the adapter boundary too.
-//! 5. `turn/steer`'s transient readiness race and `turn/interrupt`'s
-//!    cancel-vs-timeout ambiguity (A-05 §5.3/§5.4) were already mitigated in
-//!    the Codex adapter; this contract now states both as adapter
-//!    requirements (see [`RuntimeSession::steer`], [`RuntimeEvent::Ended`]).
+//! [`conformance::ConformanceScenarios::watchdog`] bounds live checks,
+//! [`SandboxCoverage`] reports detected isolation, [`ResumeSpec`] carries the
+//! session properties that can be reapplied, and [`DenyScope`] determines
+//! whether a denial ends one request or the whole turn.
 
 pub mod acpx;
 pub mod codex;
