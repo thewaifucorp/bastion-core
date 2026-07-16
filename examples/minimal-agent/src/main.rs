@@ -1,6 +1,6 @@
 //! `minimal-agent` — the smallest complete Bastion turn, built ONLY from
 //! substrate crates (`bastion-types`, `bastion-runtime`, `bastion-memory`) —
-//! never the product package `bastion` (docs/revamp/BACKLOG.md M3-04).
+//! never the product package `bastion`; see `docs/ARCHITECTURE.md`.
 //!
 //! Runs fully offline: a `MockProvider` stands in for a real LLM, a
 //! `SqliteMemory` in a temp directory stands in for a persisted install, and

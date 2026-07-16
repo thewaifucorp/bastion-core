@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio::time::{interval, Duration, MissedTickBehavior};
 
 /// Config section for the offline Reflector (LEARN-02/LEARN-05). Moved here
-/// from `src/config.rs` (M2 step 6, V2 fix — `docs/revamp/M1-ADR-substrate-split.md`):
+/// from `src/config.rs` (M2 step 6, V2 fix — `docs/ARCHITECTURE.md`):
 /// this crate (an extension) never reads the app's global `bastion.toml`
 /// format directly — the app parses `[reflector]` into this type and injects
 /// it via `Reflector::new`'s constructor param (unchanged). `src/config.rs`
@@ -219,7 +219,7 @@ impl CandidateGenerator for LlmCandidateGenerator {
         // ephemeral, pure-echo `StructuredOutputCapability` (RAII-scoped within the one
         // call). A fresh empty registry is the correct isolated context — the dispatch
         // still flows through `CapabilityRegistry::invoke`, the one sanctioned tool
-        // surface (AGENTS.md law). `Some(LocalOnly)` clears egress for the `is_local()`
+        // surface (docs/ARCHITECTURE.md law). `Some(LocalOnly)` clears egress for the `is_local()`
         // ephemeral capability; `None` would be denied on ambiguity (fail-closed).
         let mut forced_registry = CapabilityRegistry::new();
         let forced_ctx = InvokeCtx {

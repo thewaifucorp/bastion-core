@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 pub const AF_VERSION: u32 = 1;
 
-/// Loop 3-D (`docs/revamp/C3-cloud-ready-design.md`): "`.af` versionado
+/// Loop 3-D (`docs/ARCHITECTURE.md`): "`.af` versionado
 /// (INTEROP-01 já existe) + `schema_version` + id do produtor". `version`
 /// below has served as the schema version since INTEROP-01 shipped (checked
 /// by `check_version`) — kept as-is rather than renamed (a rename would
@@ -276,7 +276,7 @@ mod tests {
         assert_eq!(goals[0].description, "be healthy");
     }
 
-    // ─── Loop 3-D (docs/revamp/C3-cloud-ready-design.md), security point 1 ──
+    // ─── Loop 3-D (docs/ARCHITECTURE.md), security point 1 ──
 
     /// Local to this module's tests — `export.rs`/`import.rs` each have
     /// their own identically-shaped private `make_db` for their own tests;

@@ -1,11 +1,12 @@
+<!-- generated-by: gsd-doc-writer -->
 # Contributing to bastion-core
 
 `bastion-core` is the OSS Rust substrate that powers
-[bastion-agent](https://github.com/thewaifucorp/bastion-agent) and any host
+`bastion-agent` and any host
 that embeds it. The source is public — read it, fork it, embed it in your
 own project under the terms of [LICENSE](LICENSE).
 
-**Merge rights on this repo are restricted to Waifucorp members.** This is a
+**Merge rights on this repo are restricted to project maintainers.** This is a
 deliberate governance choice, not a reflection on contribution quality: the
 core's roadmap has to stay coupled to what's being built on top of it
 internally, and an externally-merged change that drifts from that direction
@@ -14,19 +15,23 @@ would be actively harmful to maintain. In practice:
 - **Bug reports and questions** — open an issue, anyone can. These are read
   and are the best way to influence direction.
 - **Pull requests** — external PRs are welcome as a reference/proposal but
-  are not merged as-is; a Waifucorp member will either merge it, ask for
+  are not merged as-is; a maintainer will either merge it, ask for
   changes, or reimplement the idea directly, depending on fit. Don't expect
   merge-on-green-CI.
 - **Design proposals** — open an issue first for anything beyond a small
   fix, before investing time in an implementation.
-- New behavior enters as a trait implementation or a new crate — never as a
-  rewrite of the core loop (`crates/bastion-runtime/src/agent/loop_.rs`), see
-  the "Architecture laws" in [AGENTS.md](AGENTS.md).
+- New behavior normally enters through a typed port, trait implementation, or
+  focused crate rather than a parallel rewrite of the core loop. See
+  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Development setup
 
+See [Getting started](docs/GETTING-STARTED.md) for prerequisites and the first
+offline turn, and [Development](docs/DEVELOPMENT.md) for repository structure
+and local workflow.
+
 ```bash
-git clone https://github.com/thewaifucorp/bastion-core.git
+git clone <repository-url> bastion-core
 cd bastion-core
 cargo build
 cargo test
@@ -56,7 +61,7 @@ If your change touches a crate's public API (anything in
 ## Code standards
 
 - Errors: typed `BastionError` (thiserror, `#[non_exhaustive]`,
-  `crates/bastion-types/src/error.rs` or the relevant crate's own error
+  `crates/bastion-types/src/lib.rs`) or the relevant crate's own error
   type), matched at boundaries — `anyhow` only at binary/example
   boundaries, never threaded through library APIs.
 - No `unwrap`/`expect` outside test code except a proven invariant.

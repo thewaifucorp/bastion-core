@@ -1,5 +1,5 @@
 //! `PermissionSet` — declared, deny-by-default authority an extension may use
-//! (`docs/revamp/C3-extension-protocol-design.md` §1.2).
+//! (`docs/ARCHITECTURE.md` §1.2).
 //!
 //! REGRA-MÃE (design doc §0/§1): installing an extension NEVER grants
 //! authority by itself. Every field here is something the HOST checks before
@@ -150,7 +150,7 @@ pub struct PermissionSet {
     /// Capability NAMES this extension may register/invoke through the
     /// registry. The host checks this at registration time — an extension
     /// cannot register a capability outside this list, regardless of what its
-    /// manifest's `provides` field claims (`docs/revamp/C3-extension-protocol-design.md`
+    /// manifest's `provides` field claims (`docs/ARCHITECTURE.md`
     /// §1.2: "enforcement no host, não confiança").
     #[serde(default)]
     pub capabilities: Vec<String>,

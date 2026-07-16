@@ -1,7 +1,7 @@
 //! Conformance suite for [`crate::agent_runtime::AgentRuntime`] adapters (A-02).
 //!
 //! Every adapter — native app-server, supervised ACP client, or the
-//! [`FakeRuntime`](../../../../tests/agent_runtime_conformance.rs) embedded
+//! the embedded [`FakeRuntime`] below
 //! reference implementation used by the integration tests — runs the SAME
 //! suite. A check never inspects adapter-internal types; it only calls the
 //! [`AgentRuntime`]/[`RuntimeSession`] contract and, optionally, the
@@ -802,7 +802,7 @@ pub async fn check_permission_bridge_allow<R: AgentRuntime>(
 
 /// #9b — `PermissionRequest` → `respond_permission(Deny{scope: Turn})` → the
 /// guarded action does NOT execute. Uses [`DenyScope::Turn`], the product
-/// default (Ciclo 2.2, `docs/revamp/C2-approval-port-design.md` §3) — the
+/// default (Ciclo 2.2, `docs/SECURITY-INVARIANTS.md` §3) — the
 /// outcome itself is not asserted (a `Turn` deny may end the task as
 /// `Cancelled` rather than `Success`, which is the whole point of closing
 /// the alternate-tool-routing gap), only that the guarded action never

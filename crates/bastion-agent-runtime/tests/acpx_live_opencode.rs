@@ -28,7 +28,7 @@
 //! `~/.local/share/opencode/auth.json`, a store acpx's matcher doesn't know
 //! about), and with `--auth-policy fail` aborted the whole invocation before
 //! `session/prompt` was ever sent. Full mechanism documented in
-//! `docs/revamp/A-05-conformance-matrix.md` §2A.
+//! `docs/SUPPORT-MATRIX.md` §2A.
 //!
 //! The fix (this cycle): `--auth-policy` is now a per-agent field on
 //! [`AcpxAgentRuntime`] (see `src/acpx.rs` module docs and
@@ -60,7 +60,7 @@
 //! set for its file-write tool call. This is a genuine, newly-discovered
 //! adapter-vs-wrapped-agent difference, NOT fixed here (this cycle's scope
 //! was narrowly the `--auth-policy` mismatch) — recorded as its own finding
-//! in `docs/revamp/A-05-conformance-matrix.md` §2A for a future cycle.
+//! in `docs/SUPPORT-MATRIX.md` §2A for a future cycle.
 //!
 //! # Cost note
 //!

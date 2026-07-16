@@ -10,7 +10,7 @@
 //!
 //! Unlike `detect_contestation`'s low-stakes substring match, a false positive
 //! here silently approves-and-dispatches (or rejects) a pending, potentially
-//! financial/irreversible action with no real owner confirmation (AGENTS.md:
+//! financial/irreversible action with no real owner confirmation (docs/ARCHITECTURE.md:
 //! "financial/irreversible actions need explicit user confirmation; never
 //! autonomous") — so matching is word-boundary-based, not raw substring: "sim"
 //! matches "Sim, pode fazer" but not "simular uma situação"; "no" matches "no"

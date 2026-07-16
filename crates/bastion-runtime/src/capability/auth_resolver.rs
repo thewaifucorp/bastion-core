@@ -1,5 +1,5 @@
 //! [`NullAuthResolver`] — default [`crate::agent::ports::AuthResolver`]
-//! (M4-07, `docs/revamp/BACKLOG.md`).
+//! (M4-07, `docs/ARCHITECTURE.md`).
 
 use crate::agent::ports::AuthResolver;
 use bastion_agent_runtime::{AuthProfileRef, RuntimeError};

@@ -1,5 +1,5 @@
 //! Cognition extension crate (M2 substrate split, step 6,
-//! `docs/revamp/M1-ADR-substrate-split.md`).
+//! `docs/ARCHITECTURE.md`).
 //!
 //! Hosts Dream (heuristic belief distillation/consolidation), the SEAM #2
 //! procedural/factual belief-recall context providers, onboarding identity

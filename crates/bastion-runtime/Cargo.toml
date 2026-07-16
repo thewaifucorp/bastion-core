@@ -13,7 +13,7 @@ all = "warn"
 # moved files actually use (audited import-by-import in M2 step 3b).
 [dependencies]
 bastion-types = { path = "../bastion-types" }
-# Ciclo 2.4 (docs/revamp/C2-backend-profile-design.md): the kernel's
+# Ciclo 2.4 (docs/SUPPORT-MATRIX.md): the kernel's
 # BackendProfile/RuntimeRegistry name the AgentRuntime trait object directly
 # (routing policy, not a concrete harness) — see agent/backend.rs.
 bastion-agent-runtime = { path = "../bastion-agent-runtime" }

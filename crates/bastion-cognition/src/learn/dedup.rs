@@ -49,7 +49,7 @@ fn cosine(a: &[f64], b: &[f64]) -> f64 {
 }
 
 /// Calls the `memory_embed` capability (memupalace MCP tool) via the one sanctioned
-/// tool surface (`CapabilityRegistry::invoke`, AGENTS.md "one tool surface" law) and
+/// tool surface (`CapabilityRegistry::invoke`, docs/ARCHITECTURE.md "one tool surface" law) and
 /// parses the returned JSON array as an embedding vector.
 async fn embed(
     registry: &CapabilityRegistry,
@@ -66,7 +66,7 @@ async fn embed(
 /// True if `candidate` is a semantic near-duplicate of any string in `existing`.
 ///
 /// Tries memupalace's `memory_embed` capability FIRST (via `CapabilityRegistry::invoke`,
-/// AGENTS.md "one tool surface" law); falls back to lexical overlap when the capability
+/// docs/ARCHITECTURE.md "one tool surface" law); falls back to lexical overlap when the capability
 /// call fails (memupalace down, tool missing) — this is enrichment, so it fails OPEN
 /// (never blocks the Reflector tick, matches `memory_rag.rs`'s fail-open retrieve
 /// discipline) and never panics.

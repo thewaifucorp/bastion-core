@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# M3-04: proves a complete turn is buildable with ONLY substrate crates — no
-# dependency on the product package `bastion` (see docs/revamp/BACKLOG.md
-# M3-04, docs/revamp/M1-ADR-substrate-split.md). `Provider`/`Responder`/
+# Proves a complete turn is buildable with only substrate crates — no
+# dependency on the product package `bastion` (see docs/ARCHITECTURE.md).
+# `Provider`/`Responder`/
 # `ToolSource`/`FailureSink`/`ProviderResolver` are all implemented inline
 # below with the minimum needed to complete one turn — no personas, no
 # MCP, no real network I/O. `cargo run -p minimal-agent` must succeed

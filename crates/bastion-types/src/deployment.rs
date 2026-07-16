@@ -128,6 +128,6 @@ mod tests {
         assert!(!serde_json::to_string(&audit)
             .unwrap()
             .to_lowercase()
-            .contains("katsui"));
+            .contains("forbidden-vendor"));
     }
 }

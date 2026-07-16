@@ -4,7 +4,7 @@
 #
 # Parses crates/*/Cargo.toml and validates that every bastion-* dependency
 # (and dev-dependency) edge is on the exact allowlist derived from the ADR
-# (docs/revamp/M1-ADR-substrate-split.md, BACKLOG.md decision #1). Also
+# documented in docs/ARCHITECTURE.md. Also
 # rejects:
 #   - any crate depending on the root `bastion` package (product -> substrate
 #     is a one-way street; the substrate must never depend "up" into the app);
@@ -26,7 +26,7 @@ FAIL=0
 # --- Allowlist: production [dependencies] -----------------------------------
 declare -A ALLOWED_DEPS
 ALLOWED_DEPS[bastion-types]=""
-# Ciclo 2.4 (docs/revamp/C2-backend-profile-design.md): the kernel's
+# The kernel's
 # BackendProfile/RuntimeRegistry hold Arc<dyn AgentRuntime> directly — a
 # deliberate new edge, not a core rewrite (the trait object is routing
 # policy; bastion-agent-runtime still never depends back on the kernel, so
@@ -39,12 +39,12 @@ ALLOWED_DEPS[bastion-agent-runtime]="bastion-types"
 ALLOWED_DEPS[bastion-cognition]="bastion-types bastion-runtime bastion-memory"
 ALLOWED_DEPS[bastion-personas]="bastion-types bastion-runtime bastion-memory bastion-cognition"
 ALLOWED_DEPS[bastion-mesh]="bastion-types bastion-runtime bastion-memory bastion-cognition bastion-personas"
-# Loop 3-C (docs/revamp/C3-extension-protocol-design.md §1): contracts-only
+# Contracts-only
 # crate for the extension protocol (ExtensionManifest/PackManifest/
 # PermissionSet/trust tiers). Depends only on bastion-types — zero product
 # I/O, no other substrate/extension crate needed.
 ALLOWED_DEPS[bastion-extension-protocol]="bastion-types"
-# Loop 3-C (docs/revamp/C3-extension-protocol-design.md §2/§8.7): the `Wasm`
+# The `Wasm`
 # mechanism's sandbox. Zero bastion-* dependencies — it knows nothing about
 # ExtensionManifest/PermissionSet/Capability, only how to run a wasm32
 # module with a fuel budget and no imports. `src/extension/wasm.rs` (app)

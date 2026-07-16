@@ -1,5 +1,5 @@
 //! Quasi-kernel memory backends (M2 substrate split, step 4,
-//! `docs/revamp/M1-ADR-substrate-split.md`).
+//! `docs/ARCHITECTURE.md`).
 //!
 //! The `Memory` port (trait) and its `SharedMemory` alias live in
 //! `bastion_runtime::memory` (M2 step 3b) — the runtime defines the port,

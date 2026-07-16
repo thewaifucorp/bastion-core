@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# M5 (docs/revamp/BACKLOG.md, docs/revamp/C3-m5-second-consumer-design.md):
+# M5 (docs/ARCHITECTURE.md, docs/ARCHITECTURE.md):
 # the SECOND embedded-host consumer — proves the M2 substrate boundary was
 # not shaped only around the Bastion Agent product. Built ONLY from
 # substrate/extension crates (bastion-types, bastion-runtime, bastion-memory,
@@ -12,7 +12,7 @@ publish = false
 # or patch of any bastion-* crate. A generic, neutral "embedded host"
 # (operator-owned authoritative context + versioned rule propagation), not
 # any named closed-source consumer — see the module docs in `src/` for the
-# full write-up and `docs/revamp/LOOP-REPORT.md` for the API gaps this slice
+# full write-up and `docs/ARCHITECTURE.md` for the API gaps this slice
 # found along the way.
 #
 # Expands on `examples/embedded-host` (the narrower M3 seam demo, kept as

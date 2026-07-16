@@ -86,7 +86,7 @@ pub struct TaggedValue {
 impl TaggedValue {
     /// The tag a NON-local capability's successful dispatch gets through
     /// `invoke()` (`cap.is_trusted()` defaults to `cap.is_local()`, `false`
-    /// for anything non-local). Ciclo 2.1 (`docs/revamp/C2-approval-port-design.md`
+    /// for anything non-local). Ciclo 2.1 (`docs/SECURITY-INVARIANTS.md`
     /// §4, LOOP-REPORT.md finding #4): the two `ToolSource`-bypass call sites
     /// in `agent/loop_.rs` (`dispatch_tool_loop`'s empty-registry fallback,
     /// `run_provider_fallback`'s whole tool loop) have no `Capability` object
@@ -109,7 +109,7 @@ impl TaggedValue {
 #[derive(Clone)]
 pub struct CapabilityRegistry {
     inner: HashMap<String, Arc<dyn Capability>>,
-    /// SEC-01 approval gate (Ciclo 2.1, `docs/revamp/C2-approval-port-design.md`
+    /// SEC-01 approval gate (Ciclo 2.1, `docs/SECURITY-INVARIANTS.md`
     /// §1: `ApprovalGate` port, not a concrete `Option<Arc<ApprovalQueue>>`).
     /// NEVER `Option` — approval is mandatory. `CapabilityRegistry::new()`
     /// wires the explicit fail-closed `NullApprovalGate` by default (see
@@ -251,7 +251,7 @@ impl CapabilityRegistry {
     /// `cap.is_trusted()` — including the approval-gate early-returns above
     /// (Policy 2's `AlreadyExecuted`/`awaiting_approval` branches), so every
     /// Ok exit from `invoke()` produces the new type consistently. Ciclo 2.1
-    /// (behavior change, `docs/revamp/C2-approval-port-design.md` §2): a
+    /// (behavior change, `docs/SECURITY-INVARIANTS.md` §2): a
     /// `Rejected` outcome is the one Policy-2 branch that does NOT produce a
     /// `TaggedValue` — it returns `Err(BastionError::ApprovalDenied)` instead,
     /// mirroring Policy 1's own `Err` shape (never a disguised-as-success

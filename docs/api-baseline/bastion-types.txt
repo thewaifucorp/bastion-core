@@ -7,6 +7,13 @@ fn context_artifact.rs:latest_published
 fn context_artifact.rs:new
 fn context_artifact.rs:publish
 fn context_artifact.rs:stale_policy
+struct deployment.rs:DeploymentContext
+enum deployment.rs:DeploymentMode
+struct deployment.rs:EffectAudit
+struct deployment.rs:EffectContext
+struct deployment.rs:PolicyDecision
+enum deployment.rs:PolicyDisposition
+fn deployment.rs:managed
 struct lib.rs:AgentConfig
 enum lib.rs:ApprovalOutcome
 struct lib.rs:ApprovalRow
@@ -21,7 +28,11 @@ enum lib.rs:ContentPart
 use lib.rs:ContextRevision
 enum lib.rs:ConveneReason
 enum lib.rs:DenyScope
+use lib.rs:DeploymentContext
+use lib.rs:DeploymentMode
 struct lib.rs:Dissent
+use lib.rs:EffectAudit
+use lib.rs:EffectContext
 enum lib.rs:FailureKind
 struct lib.rs:Goal
 struct lib.rs:LlmResponse
@@ -33,6 +44,8 @@ enum lib.rs:Outcome
 struct lib.rs:PendingCorrection
 struct lib.rs:Persona
 type lib.rs:PersonaId
+use lib.rs:PolicyDecision
+use lib.rs:PolicyDisposition
 enum lib.rs:PrivacyTier
 enum lib.rs:ResponseMode
 enum lib.rs:Role
@@ -46,6 +59,7 @@ struct lib.rs:ToolCall
 enum lib.rs:ToolChoice
 use lib.rs:VersionedContextArtifact
 mod lib.rs:context_artifact
+mod lib.rs:deployment
 fn lib.rs:from_sql_str
 mod lib.rs:secret
 fn lib.rs:strip_think

@@ -1,65 +1,79 @@
+<!-- generated-by: gsd-doc-writer -->
 # bastion-core
 
-[![ci](https://github.com/thewaifucorp/bastion-core/actions/workflows/ci.yml/badge.svg)](https://github.com/thewaifucorp/bastion-core/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![rust](https://img.shields.io/badge/rust-2021_edition-orange.svg)](Cargo.toml)
+[![rust](https://img.shields.io/badge/Rust-2021-orange.svg)](Cargo.toml)
 
-The **OSS Rust substrate** for building persistent, governable, cognitive AI agents — the stable execution/cognition layer that powers [bastion-agent](https://github.com/thewaifucorp/bastion-agent) and can be embedded by any host.
+The OSS Rust substrate for building persistent, governable AI agents. It provides embeddable execution, policy, memory, cognition, persona, provider, MCP, mesh, and extension primitives; applications such as `bastion-agent` provide the CLI, channels, configuration, and deployment composition.
 
-`bastion-core` is a Cargo workspace of focused crates. It is **mechanism, not orchestrator**: it hosts the agent tool-loop, mediates every tool call through one capability boundary, and injects context/policy through typed seams — it is a host, never a DAG/workflow engine.
+`bastion-core` is a library workspace, not a standalone daemon or workflow engine. Hosts choose the crates they need and supply product policy through typed ports.
 
-## Crates
+## Quick start
 
-| Crate | Role |
-|---|---|
-| `bastion-types` | leaf types, IDs, errors, versioned-context artifacts |
-| `bastion-runtime` | agent loop, capabilities, context, sessions, hooks, the `Provider`/`Memory` traits, and every kernel port |
-| `bastion-agent-runtime` | `AgentRuntime` contract + adapters (Codex app-server, ACP/`acpx`) — external harnesses that own their own tool loop |
-| `bastion-memory` | beliefs, provenance, temporality, contestable-memory store |
-| `bastion-cognition` | Dream/consolidation, procedural learning, goals, proactivity, Cabinet deliberation |
-| `bastion-personas` | `AgentDefinition`/personas, routing, deliberation |
-| `bastion-mesh` | mesh transport, agent identity, `.af` interop, scheduler |
-| `bastion-mcp` | MCP client/server |
-| `bastion-providers` | concrete model providers + auth resolution |
-| `bastion-extension-protocol` | extension manifests, permissions, trust tiers, lockfiles |
-| `bastion-extension-wasm` | `wasmi`-backed WASM/WASI extension sandbox |
+The smallest example runs offline with a mock provider and temporary SQLite storage:
 
-## Memory lineage
+```bash
+git clone <repository-url> bastion-core
+cd bastion-core
+cargo run -p minimal-agent
+```
 
-Bastion's memory system is a synthesis inspired by two open-source projects:
-[Mem0](https://github.com/mem0ai/mem0), for persistent personalized agent memory,
-multi-level identity scoping, semantic retrieval, and memory lifecycle ideas; and
-[MemPalace](https://github.com/MemPalace/mempalace), for local-first verbatim storage,
-spatial taxonomy, scoped retrieval, and temporal knowledge-graph ideas.
+Expected output includes:
 
-Bastion is not an official distribution of either project. Its own contribution is a
-governed memory contract: beliefs retain provenance and temporal validity, are scoped
-to canonical owners, can be contested/corrected/revoked, and remain subordinate to the
-runtime's capability and authority boundaries. See [Memory architecture](docs/MEMORY.md).
+```text
+Hello from minimal-agent! (you said: hello)
+```
 
-## Guarantees
+The repository does not currently publish a single installable `bastion-core` package. Workspace crates are consumed as Rust dependencies, while the examples demonstrate complete host composition.
 
-- **One tool surface** — everything goes through `CapabilityRegistry::invoke`, the single policy boundary. Agents never get raw SQL.
-- **Egress fail-closed** — `check_egress(tier, dest)` gates what leaves to non-local providers; `local-only` context never reaches a cloud provider.
-- **Trust follows content** — external/tool content is untrusted; it never gains authority by entering the context.
-- **Owner/session isolation**, typed non-bypassable approval, opaque external context.
+## Workspace
 
-The one-way crate-dependency boundary (kernel ← extensions ← consumers, never the reverse) is enforced in CI (`scripts/check-crate-deps.sh`). Security invariants: [docs/SECURITY-INVARIANTS.md](docs/SECURITY-INVARIANTS.md). Public-API stability policy: [docs/VERSIONING.md](docs/VERSIONING.md). Backend support matrix: [docs/SUPPORT-MATRIX.md](docs/SUPPORT-MATRIX.md).
+| Layer | Crates | Responsibility |
+| --- | --- | --- |
+| Contracts | `bastion-types` | Shared messages, privacy tiers, approvals, beliefs, deployment context, and secret references |
+| Kernel | `bastion-runtime`, `bastion-memory` | Agent loop, typed ports, capabilities, sessions, hooks, governed memory, and SQLite persistence |
+| Intelligence | `bastion-cognition`, `bastion-personas` | Goals, learning, evaluation, proactivity, Cabinet deliberation, persona routing, and response composition |
+| Integrations | `bastion-providers`, `bastion-mcp`, `bastion-agent-runtime`, `bastion-mesh` | Model providers, MCP, external agent harnesses, identity, transport, interop, and scheduling |
+| Extensions | `bastion-extension-protocol`, `bastion-extension-wasm` | Manifests, permissions, trust, lockfiles, and a fuel-bounded WASM sandbox |
 
-## Embedding
+The permitted dependency direction is enforced by `scripts/check-crate-deps.sh`. See [Architecture](docs/ARCHITECTURE.md) for the layers, runtime flow, and Core/product boundary.
 
-`examples/minimal-agent` and `examples/embedded-host` show a full turn built from substrate crates alone (never the product). `examples/embedded-host-slice` is the reference external consumer that proves the boundary holds for a second host.
+## Examples
 
-## Consumers
+| Example | What it demonstrates | Command |
+| --- | --- | --- |
+| `minimal-agent` | Smallest complete offline turn | `cargo run -p minimal-agent` |
+| `embedded-host` | Host-defined context and approval policy | `cargo run -p embedded-host` |
+| `embedded-host-slice` | Two-owner isolation, rule propagation, and host-owned observability | `cargo run -p embedded-host-slice` |
 
-- [bastion-agent](https://github.com/thewaifucorp/bastion-agent) — the personal-agent product and flagship consumer.
+All examples depend only on workspace crates; none imports the `bastion-agent` product.
+
+## Design guarantees
+
+- Capability execution is mediated by typed policy boundaries, with fail-closed egress and approval behavior.
+- Trust follows content; tool output does not become authoritative merely by entering context.
+- Session, memory, and approval state are owner-scoped.
+- External context is carried through typed ports, leaving application business state with the embedding host.
+- Observability is exposed through neutral traits and OpenTelemetry types rather than a required vendor.
+
+The exact contracts and their current code evidence live in [Security invariants](docs/SECURITY-INVARIANTS.md). Backend-specific guarantees live in the [support matrix](docs/SUPPORT-MATRIX.md).
+
+## Documentation
+
+- [Getting started](docs/GETTING-STARTED.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Development](docs/DEVELOPMENT.md)
+- [Testing](docs/TESTING.md)
+- [Memory architecture](docs/MEMORY.md)
+- [Versioning policy](docs/VERSIONING.md)
+- [Backend support matrix](docs/SUPPORT-MATRIX.md)
+- [Security invariants](docs/SECURITY-INVARIANTS.md)
+
+Historical product documentation is kept under `docs/archive/` and is not an implementation reference for this workspace.
 
 ## Contributing
 
-Source is public; merge rights are restricted to Waifucorp members — issues
-and PR proposals are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for
-the development setup, required checks, code standards, and the
-contribution model. [CHANGELOG.md](CHANGELOG.md) tracks notable changes.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for governance, required checks, and the contribution process.
 
 ## License
 

@@ -2,10 +2,8 @@
 #
 # dump-public-api.sh — deterministic public-API surface dump per crate.
 #
-# Ciclo 2.3 / M3-01 (docs/revamp/M3-CLOSE.md §7): a cheap, dependency-free
-# baseline of every `pub` item exposed by each workspace crate (the root
-# `bastion` app package plus the 9 `crates/bastion-*` substrate/extension
-# crates), written to docs/api-baseline/<crate>.txt.
+# Dependency-free baseline of every `pub` item exposed by each workspace
+# library crate, written to docs/api-baseline/<crate>.txt.
 #
 # Method: structured grep/parse (not `cargo public-api`/`cargo semver-checks`
 # — neither is vendored or network-fetchable in this environment, and a
@@ -48,7 +46,6 @@ fi
 
 # crate-name -> path to its src/ root
 declare -A CRATE_SRC
-CRATE_SRC[bastion]="src"
 for dir in crates/*/; do
   name="$(basename "$dir")"
   [[ -d "${dir}src" ]] || continue
@@ -66,8 +63,7 @@ root = sys.argv[1]
 entries = []
 
 #
-# 6c (docs/revamp/C3-runtime-followups-design.md): `pub fn` alone missed
-# every `pub async fn` in the kernel (`run_turn`, `delegate_task`, etc.) —
+# `pub fn` alone misses every `pub async fn` in the kernel, so
 # the whole async public surface was invisible to this baseline. The
 # modifier group below accepts zero or more of `async`/`unsafe`/`const`
 # between `pub` and the kind keyword (defensive: `unsafe` never appears

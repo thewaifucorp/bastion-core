@@ -26,7 +26,7 @@ const MAX_TOOL_ROUNDS: u32 = 10;
 const DEFAULT_SYSTEM_PROMPT: &str = "You are Bastion, a proactive personal AI assistant.";
 pub const DEFAULT_OWNER: &str = "_local";
 
-/// Loop 3-A (6d, `docs/revamp/C3-runtime-followups-design.md` §6d): one item
+/// Loop 3-A (6d, `docs/ARCHITECTURE.md` §6d): one item
 /// queued on the [`AgentLoop::pending_tx`] proactive-message seam (PROACT-05).
 ///
 /// Before this type, `pending_tx` carried a bare `String` and the daemon's
@@ -138,7 +138,7 @@ pub struct AgentLoop {
     /// used to be called). `None` = no observer; production injects
     /// `agent::skills::SkillReloadObserver`.
     pub tool_result_observer: Option<Arc<dyn ToolResultObserver>>,
-    /// Ciclo 2.4 (`docs/revamp/C2-backend-profile-design.md` §2): per-owner
+    /// Ciclo 2.4 (`docs/SUPPORT-MATRIX.md` §2): per-owner
     /// backend selection — `Model` (default, this field's `Default` impl)
     /// preserves every pre-Ciclo-2.4 behavior byte-for-byte. Set post-construction
     /// via [`AgentLoop::with_backend_profile`], never a `new()` parameter —
@@ -153,14 +153,14 @@ pub struct AgentLoop {
     pub runtime_registry: RuntimeRegistry,
     /// Ciclo 2.4 (design doc §3, mode 3): cancellation channel per in-flight
     /// delegated task, keyed by its `runtime_sessions` persistence key.
-    /// Bookkeeping only — NOT a DAG/workflow engine (AGENTS.md architecture
+    /// Bookkeeping only — NOT a DAG/workflow engine (docs/ARCHITECTURE.md architecture
     /// law): the only two operations are "remember how to signal a cancel"
     /// (`delegate_task`/`resume_delegated_task`) and "forget once the task
     /// ended" (the spawned consumer removes its own entry) — nothing here
     /// schedules or sequences across entries.
     pub delegated_tasks:
         Arc<tokio::sync::Mutex<std::collections::HashMap<String, mpsc::Sender<()>>>>,
-    /// Loop 3-A (6a, `docs/revamp/C3-runtime-followups-design.md` §6a):
+    /// Loop 3-A (6a, `docs/ARCHITECTURE.md` §6a):
     /// owner-scoped, persisted cross-turn queue for a harness's
     /// `PermissionRequest` events. Defaults to `NullPermissionGate`
     /// (`capability::permission_queue`) — fail-closed, byte-identical to
@@ -214,12 +214,12 @@ impl AgentLoop {
     // `mcp::registry_setup::register_mcp_tools`, called by the composition root
     // (`main.rs`) right after this constructor, against the same registry.
     //
-    // Ciclo 2.1 (`docs/revamp/C2-approval-port-design.md` §1): the constructor
+    // Ciclo 2.1 (`docs/SECURITY-INVARIANTS.md` §1): the constructor
     // no longer hardwires its own `ApprovalQueue` from a `db_path: &str`
     // parameter — it receives the already-built `Arc<dyn ApprovalGate>`
     // (production: `main.rs` builds `SqliteApprovalGate::new(db_path)`; a
     // second consumer injects its own policy). This closes the M3-CLOSE §3
-    // gap (finding #1/#2, `docs/revamp/LOOP-REPORT.md` #3): there is now a
+    // gap (finding #1/#2, `docs/ARCHITECTURE.md` #3): there is now a
     // real constructor lever to opt out of a persistent queue or inject an
     // alternative decision mechanism.
     #[allow(clippy::too_many_arguments)]
@@ -295,7 +295,7 @@ impl AgentLoop {
         }
     }
 
-    /// Ciclo 2.4 (`docs/revamp/C2-backend-profile-design.md` §2): opt a
+    /// Ciclo 2.4 (`docs/SUPPORT-MATRIX.md` §2): opt a
     /// session/owner into a non-default `ConversationBackend`/`task_runtime`.
     /// Post-construction builder (not a `new()` parameter) so every existing
     /// call site keeps compiling unchanged — the composition root (`main.rs`)
@@ -462,7 +462,7 @@ impl AgentLoop {
         parts
     }
 
-    /// Ciclo 2.4 (`docs/revamp/C2-backend-profile-design.md` §3, mode 2):
+    /// Ciclo 2.4 (`docs/SUPPORT-MATRIX.md` §3, mode 2):
     /// runtime-backed primary conversation — the harness owns this turn's
     /// tool-loop; Bastion stays owner of identity/memory/channels/supervision
     /// (the caller appends the returned text to the session; this function
@@ -474,7 +474,7 @@ impl AgentLoop {
     /// Permission requests from the harness are audited into the SAME
     /// `PermissionGate`/`permission_queue` mode 3's consumer uses (Loop 3-A,
     /// 6a) — but this function runs synchronously inside ONE turn (the
-    /// daemon serializes through a single `&mut agent`, AGENTS.md
+    /// daemon serializes through a single `&mut agent`, docs/ARCHITECTURE.md
     /// architecture law), so it cannot block waiting for a LATER turn's
     /// plain-language "sim"/"não" to resolve a freshly-raised request without
     /// freezing every other owner's turn for the wait's duration — the exact
@@ -593,13 +593,13 @@ impl AgentLoop {
                     action,
                     detail,
                 } if t == task => {
-                    // 6a (docs/revamp/C3-runtime-followups-design.md §6a):
+                    // 6a (docs/ARCHITECTURE.md §6a):
                     // audited through the SAME `PermissionGate`/`permission_queue`
                     // mode 3 uses (single source of truth for "what did a
                     // harness ask permission for"), but resolved IMMEDIATELY —
                     // never a genuine pause. This function runs synchronously
                     // inside ONE turn; the daemon serializes through a single
-                    // `&mut agent` (AGENTS.md architecture law), so pausing
+                    // `&mut agent` (docs/ARCHITECTURE.md architecture law), so pausing
                     // here would freeze every other owner's turn for as long
                     // as the wait lasted — exactly what 6a's design forbids
                     // ("nenhuma espera síncrona segura o `&mut agent`").
@@ -876,7 +876,7 @@ impl AgentLoop {
         Ok(())
     }
 
-    /// Loop 3-A (6a, `docs/revamp/C3-runtime-followups-design.md` §6a):
+    /// Loop 3-A (6a, `docs/ARCHITECTURE.md` §6a):
     /// resolve a paused harness permission request from a LATER turn — the
     /// "sim"/"não" (or a dedicated cockpit surface) that answers what a
     /// delegated task's consumer is genuinely waiting on, never mid-turn
@@ -960,11 +960,11 @@ impl AgentLoop {
                     .map(|_| format!("Memória {} contestada e revogada.", id)),
             );
         }
-        // M4-07 (`docs/revamp/BACKLOG.md`, `docs/SUPPORT-MATRIX.md`): backend
+        // M4-07 (`docs/ARCHITECTURE.md`, `docs/SUPPORT-MATRIX.md`): backend
         // selection UX — list available backends (health + auth resolved),
         // choose conversation/task_runtime, diagnose why one is unavailable.
         // A single global switch on THIS `AgentLoop` (the daemon serializes
-        // every owner's turn through one `&mut agent`, AGENTS.md law) — not
+        // every owner's turn through one `&mut agent`, docs/ARCHITECTURE.md law) — not
         // per-owner; `/backend use` changes what EVERY subsequent turn on
         // this process uses until changed again or the daemon restarts back
         // to the `[backend]` TOML default.
@@ -1389,7 +1389,7 @@ impl AgentLoop {
             drop(provider_ref);
         }
 
-        // Ciclo 2.4 (`docs/revamp/C2-backend-profile-design.md` §3, mode 2):
+        // Ciclo 2.4 (`docs/SUPPORT-MATRIX.md` §3, mode 2):
         // a runtime-backed conversation backend takes over the WHOLE
         // route+dispatch section below — the harness owns this turn's
         // tool-loop, Bastion does not also run persona routing/Cabinet on
@@ -1510,7 +1510,7 @@ impl AgentLoop {
     ///
     /// Returns the final text answer from the LLM (after all tool rounds complete).
     ///
-    /// Ciclo 2.1 (`docs/revamp/C2-approval-port-design.md` §2/§3, behavior
+    /// Ciclo 2.1 (`docs/SECURITY-INVARIANTS.md` §2/§3, behavior
     /// change): an `Err(BastionError::ApprovalDenied)` from `invoke()` is a
     /// structured tool-result error, not a crash of the turn — same handling
     /// as any other caught error. When its `scope` is `DenyScope::Turn` (the
@@ -2277,7 +2277,7 @@ impl TurnKernel for AgentLoop {
     }
 }
 
-/// Ciclo 2.4 (`docs/revamp/C2-backend-profile-design.md` §3): filesystem
+/// Ciclo 2.4 (`docs/SUPPORT-MATRIX.md` §3): filesystem
 /// confinement root for a runtime-backed session/task, one directory per
 /// owner. A minimal, deliberately simple default for this cycle (declarative
 /// config, not rich per-deployment workspace policy yet — M4 pleno scope);
@@ -2393,7 +2393,7 @@ enum PermissionWaitOutcome {
     CancelledWhilePending(bastion_agent_runtime::PermissionDecision),
 }
 
-/// Loop 3-A (6a, `docs/revamp/C3-runtime-followups-design.md` §6a): the
+/// Loop 3-A (6a, `docs/ARCHITECTURE.md` §6a): the
 /// GENUINE cross-turn pause. Persists `PendingPermission` (owner-scoped,
 /// `PermissionGate::enqueue`), registers an in-memory wake-up channel keyed
 /// by the assigned `row_id`, then waits — WITHOUT holding `&mut agent` (this
@@ -2580,7 +2580,7 @@ fn spawn_delegated_task_consumer(
                                 ?action,
                                 detail = %detail,
                             );
-                            // 6a (docs/revamp/C3-runtime-followups-design.md
+                            // 6a (docs/ARCHITECTURE.md
                             // §6a): genuine cross-turn pause. This consumer
                             // runs in its OWN spawned tokio task — never
                             // holding `&mut agent` — so it CAN wait for a
@@ -2705,7 +2705,7 @@ fn spawn_delegated_task_consumer(
 }
 
 /// Classify a `ToolSource`-bypass dispatch outcome into a `TaggedValue` —
-/// Ciclo 2.1 (`docs/revamp/C2-approval-port-design.md` §4, LOOP-REPORT.md
+/// Ciclo 2.1 (`docs/SECURITY-INVARIANTS.md` §4, LOOP-REPORT.md
 /// finding #4). The two registry-bypass call sites (`dispatch_tool_loop`'s
 /// empty-registry fallback, `run_provider_fallback`'s whole tool loop) have
 /// no `Capability` object to call `.is_trusted()` on — this function is the
@@ -3484,7 +3484,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // 6d (docs/revamp/C3-runtime-followups-design.md): owner-routed
+    // 6d (docs/ARCHITECTURE.md): owner-routed
     // delegated-task delivery. Minimal in-process fake `AgentRuntime` — NOT
     // the shared conformance `FakeRuntime` (that one is private to
     // `tests/agent_runtime_conformance.rs`, a separate integration-test

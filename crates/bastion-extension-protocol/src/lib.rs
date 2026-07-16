@@ -1,5 +1,5 @@
 //! `bastion-extension-protocol` — contracts for third-party extensions
-//! (`docs/revamp/C3-extension-protocol-design.md`, M4-08..12).
+//! (`docs/ARCHITECTURE.md`, M4-08..12).
 //!
 //! This is the largest new security surface of the revamp: third-party code
 //! enters the runtime. The one rule every type/method in this crate exists to
@@ -16,7 +16,7 @@
 //! capability, reach a host, read memory, or bind a socket without a
 //! `PermissionSet` check actually running) lives in the HOST, which is
 //! product code (`src/extension/`, `bastion-agent` app) — see
-//! `docs/revamp/C3-extension-protocol-design.md` §3.
+//! `docs/ARCHITECTURE.md` §3.
 //!
 //! Modules:
 //! - [`manifest`] — `ExtensionManifest`/`PackManifest` and their parts (§1.1).

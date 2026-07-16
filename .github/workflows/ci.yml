@@ -25,7 +25,7 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test
 
-  # M3-04: the examples must stay buildable against the substrate crates
+  # Examples must stay buildable against the substrate crates
   # alone (they never depend on the root `bastion` package) — a cheap check
   # that the public API remains sufficient for an external consumer.
   examples:
@@ -36,7 +36,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo check -p minimal-agent -p embedded-host
 
-  # Ciclo 2.3 / M3-01 (docs/revamp/M3-CLOSE.md §7): fail loudly when a
+  # Fail loudly when a
   # crate's public surface (docs/api-baseline/<crate>.txt) drifts from the
   # working tree without the baseline being regenerated and committed.
   # See docs/VERSIONING.md for what a baseline diff means for versioning.
@@ -46,8 +46,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: bash scripts/dump-public-api.sh --check
 
-  # Loop 3-D (docs/revamp/C3-cloud-ready-design.md, acceptance criterion 5 +
-  # decision #18): the kernel/product code must never gain a billing/
+  # The kernel code must never gain a billing/
   # marketplace/tenancy/control-plane SYMBOL, and no tracked file may
   # reintroduce a scrubbed corporate name. Cheap (no toolchain needed).
   scope-and-scrub:

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 #
-# check-scope-and-scrub.sh — Loop 3-D (docs/revamp/C3-cloud-ready-design.md),
-# acceptance criterion 5 + decision #18 (docs/revamp/BACKLOG.md).
+# check-scope-and-scrub.sh — public repository scope and name-scrub gate.
 #
 # Two independent guards, run together because both gate what may exist in
 # this PUBLIC repo:
@@ -9,15 +8,14 @@
 #   1. Cloud-concept scope guard — the Core must never gain a billing,
 #      marketplace, tenancy, or control-plane SYMBOL (a `struct`/`enum`/
 #      `trait`/`fn`/`mod`/`const`/`static`/`type` DECLARATION, not a prose
-#      mention). Design docs are explicitly allowed to name these concepts
-#      when documenting them as OUT OF SCOPE (e.g. C3-cloud-ready-design.md's
-#      own "Fora de escopo" section) — this guard only scans compiled `.rs`
+#      mention). Design docs may name these concepts when documenting them as
+#      out of scope; this guard only scans compiled `.rs`
 #      code (src/, crates/*/src/, tests/, examples/*/src/), never docs/.
 #      Comment-only lines (`//`, `///`, `//!`) are excluded — a code comment
 #      explaining why the kernel does NOT have a concept (this script's own
 #      doc comments included) is not a violation.
 #
-#   2. Corporate-name scrub guard (decision #18) — a small, deliberately
+#   2. Corporate-name scrub guard — a small, deliberately
 #      short, low-collision blocklist of proprietary names scrubbed from
 #      this repo's public tip on 2026-06-30. Scans EVERY tracked file (not
 #      just code) — a leaked name in a doc, a comment, or a config file is

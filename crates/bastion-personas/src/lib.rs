@@ -1,5 +1,5 @@
 //! Personas extension crate (M2 substrate split, step 6,
-//! `docs/revamp/M1-ADR-substrate-split.md`).
+//! `docs/ARCHITECTURE.md`).
 //!
 //! Hosts `Persona`/`PersonaRegistry` (SOUL.md loading), the router (turn
 //! classification into Single/Parallel/Cabinet), the runner (Single/Parallel

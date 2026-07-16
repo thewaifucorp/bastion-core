@@ -1,4 +1,4 @@
-//! M5.1 (`docs/revamp/C3-m5-second-consumer-design.md` §"M5.1 — propagação
+//! M5.1 (`docs/ARCHITECTURE.md` §"M5.1 — propagação
 //! de regra versionada"): the host's own `RuleStore` + `TurnContextProvider`
 //! built on top of `bastion_types::VersionedContextArtifact`/`ContextRevision`
 //! (the contract that had to be BORN in the substrate for this — see
@@ -227,7 +227,7 @@ impl TurnContextProvider for RuleBundleContextProvider {
 
 /// Read the sole content string out of a 0-or-1-block turn-context result.
 /// `ContextBlock` has no `Debug`/`PartialEq` derive (see
-/// `docs/revamp/LOOP-REPORT.md` finding on this slice) — a second consumer
+/// `docs/ARCHITECTURE.md` finding on this slice) — a second consumer
 /// asserting on injected content has to destructure fields manually rather
 /// than `assert_eq!` the struct, which this helper does once instead of at
 /// every call site below.

@@ -1,5 +1,4 @@
-//! `embedded-host` — the "second consumer" seam (docs/revamp/BACKLOG.md M5,
-//! `docs/revamp/M1-ADR-substrate-split.md`), built ONLY from substrate crates
+//! `embedded-host` — a second-consumer example, built only from substrate crates
 //! (`bastion-types`, `bastion-runtime`, `bastion-memory`) — never the product
 //! package `bastion`.
 //!
@@ -11,7 +10,7 @@
 //! 2. **A custom capability, registered through the public
 //!    `CapabilityRegistry` API** — no fork of the registry, no product code.
 //! 3. **An authorization policy that denies an action, through the host's OWN
-//!    `ApprovalGate`** — Ciclo 2.1 (`docs/revamp/C2-approval-port-design.md`)
+//!    `ApprovalGate`** — Ciclo 2.1 (`docs/SECURITY-INVARIANTS.md`)
 //!    closed the API gap M3 found here (`AgentLoop::new` used to hardwire its
 //!    own SQLite queue with no opt-out, and a denial was indistinguishable
 //!    from "still pending"): the host now injects `ThresholdDenyGate` — its
@@ -114,7 +113,7 @@ impl Capability for WireTransferCapability {
 
 // ---------------------------------------------------------------------------
 // 3. The host's OWN authorization policy — a custom `ApprovalGate`, no
-// SQLite at all (Ciclo 2.1, docs/revamp/C2-approval-port-design.md §1).
+// SQLite at all (Ciclo 2.1, docs/SECURITY-INVARIANTS.md §1).
 // ---------------------------------------------------------------------------
 
 /// A minimal, in-memory authorization policy: denies any capability whose
@@ -288,7 +287,7 @@ async fn demonstrate_opaque_context(agent: &AgentLoop) {
 /// (`ThresholdDenyGate`, injected into `AgentLoop::new` in `main()` below,
 /// no SQLite involved) can deny it with a typed `Err`.
 ///
-/// RESOLVED (Ciclo 2.1, `docs/revamp/C2-approval-port-design.md`): this used
+/// RESOLVED (Ciclo 2.1, `docs/SECURITY-INVARIANTS.md`): this used
 /// to document a real API gap found while writing this example — `AgentLoop::new`
 /// hardwired its own SQLite `ApprovalQueue` with no opt-out, and even the
 /// only available lever (`.reject(owner, id)` on an already-queued row)

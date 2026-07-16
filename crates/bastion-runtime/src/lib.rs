@@ -1,4 +1,4 @@
-//! Bastion kernel runtime (M2 substrate split, `docs/revamp/M1-ADR-substrate-split.md`).
+//! Bastion kernel runtime (M2 substrate split, `docs/ARCHITECTURE.md`).
 //!
 //! Hosts the agent tool-loop and its policy boundary: `CapabilityRegistry`
 //! (the single tool surface), the session store, the runtime hooks

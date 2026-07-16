@@ -1,5 +1,5 @@
 //! Mesh extension crate (M2 substrate split, step 6,
-//! `docs/revamp/M1-ADR-substrate-split.md`).
+//! `docs/ARCHITECTURE.md`).
 //!
 //! Hosts the mesh connectivity layer (`MeshTransport`, the P2P OSS impl, the
 //! per-owner export allowlist, the `MeshSliceProvider` SEAM #2 context

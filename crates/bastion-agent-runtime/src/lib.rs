@@ -11,7 +11,7 @@
 //! names a concrete harness.
 //!
 //! Security invariants carried by this contract (threat model in
-//! `docs/revamp/A-01-agentruntime-contract.md`):
+//! `docs/SUPPORT-MATRIX.md`):
 //! - transport is structured protocol only — interpreting human stdout or
 //!   ANSI output is a conformance failure, not a fallback;
 //! - everything a harness returns is untrusted until policy says otherwise;
@@ -23,7 +23,7 @@
 //!
 //! # v2 (Ciclo 2.2 — contract review against 6 live-validation findings)
 //!
-//! `docs/revamp/A-05-conformance-matrix.md` §5 found six gaps by actually
+//! `docs/SUPPORT-MATRIX.md` §5 found six gaps by actually
 //! running the suite against real harnesses. This revision closes them:
 //! 1. [`conformance::ConformanceScenarios::watchdog`] replaces the
 //!    crate-wide `const WATCHDOG` — live cloud adapters need a longer bound
@@ -34,7 +34,7 @@
 //!    subset of [`SessionSpec`] (timeout/permissions/env; workspace/sandbox
 //!    stay fixed to the original session).
 //! 4. [`PermissionDecision::Deny`] carries a [`DenyScope`], mirroring the
-//!    kernel's `bastion_types::DenyScope` (`docs/revamp/C2-approval-port-design.md`
+//!    kernel's `bastion_types::DenyScope` (`docs/SECURITY-INVARIANTS.md`
 //!    §3): `Turn` makes the adapter cancel the task gracefully after
 //!    denying, closing the "deny one tool call, model reroutes through
 //!    another" gap (A-05 §5.5) at the adapter boundary too.
@@ -390,7 +390,7 @@ pub enum PermissionAction {
 }
 
 /// Scope of a denied permission request (Ciclo 2.2, mirroring the kernel's
-/// `bastion_types::DenyScope` — `docs/revamp/C2-approval-port-design.md`
+/// `bastion_types::DenyScope` — `docs/SECURITY-INVARIANTS.md`
 /// §3). `bastion-agent-runtime` is still a standalone crate (no
 /// `bastion-types` dependency; see the M1/M2 substrate split), so this is a
 /// deliberate, documented duplicate of the same two-variant vocabulary, not

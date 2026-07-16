@@ -1,7 +1,6 @@
-//! `embedded-host-slice` — Loop 3-E / M5, the SECOND embedded-host consumer
-//! (`docs/revamp/BACKLOG.md` M5, `docs/revamp/C3-m5-second-consumer-design.md`).
+//! `embedded-host-slice` — the broader second embedded-host consumer.
 //!
-//! `examples/embedded-host` (M3) already proved a second consumer COMPILES
+//! `examples/embedded-host` already proves a second consumer compiles
 //! against the substrate. This slice proves the boundary actually holds
 //! under a second REAL owner: an owner-local `AgentDefinition` built outside
 //! the personal Agent, authoritative business context injected from
@@ -9,14 +8,12 @@
 //! host owns, two owners sharing one process with zero leakage, OTel spans
 //! the host correlates without the kernel ever learning what it's
 //! correlating to, and a versioned rule bundle that propagates to the right
-//! owner without a rebuild/redeploy (M5.1).
+//! owner without a rebuild/redeploy.
 //!
-//! Gate-mãe (non-negotiable, `docs/revamp/C3-m5-second-consumer-design.md`):
+//! Architectural gate (see `docs/ARCHITECTURE.md`):
 //! **zero import of the `bastion` app package, zero fork/patch of any
 //! `bastion-*` crate** — every dependency in `Cargo.toml` is a substrate/
-//! extension crate, consumed only through its public API. Every `pub` this
-//! slice needed but did not find is documented as a finding in
-//! `docs/revamp/LOOP-REPORT.md`, not silently worked around.
+//! extension crate, consumed only through its public API.
 //!
 //! Deliberately GENERIC and neutral: "an embedding host with authoritative
 //! business state and an operator" — readable as a team runtime, a support
@@ -64,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
 
     // OTel MUST be wired before `AgentLoop::new()` — otherwise spans created
     // inside the kernel are dropped by a no-op tracer (same PITFALL 6
-    // `src/main.rs`'s `init_otel_provider` documents for the real app).
+    // the embedding product's telemetry initialization documents).
     let exporter = CapturingExporter::new();
     let _otel_provider = init_otel(exporter.clone());
 
@@ -372,7 +369,7 @@ async fn demonstrate_two_owner_isolation(
 }
 
 /// Component 6 — FIXED in Loop 3-F (was a FINDING in Loop 3-E,
-/// `docs/revamp/LOOP-REPORT.md`).
+/// `docs/ARCHITECTURE.md`).
 ///
 /// The design intent: the kernel emits generic `gen_ai.*` spans with zero
 /// knowledge of the host's business object, and the host correlates a span

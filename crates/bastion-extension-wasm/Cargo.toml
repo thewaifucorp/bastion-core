@@ -3,7 +3,7 @@ name    = "bastion-extension-wasm"
 version = "0.1.0"
 edition = "2021"
 
-# Loop 3-C (docs/revamp/C3-extension-protocol-design.md §2/§8.7): the `Wasm`
+# Loop 3-C (docs/ARCHITECTURE.md §2/§8.7): the `Wasm`
 # mechanism's sandbox. Deliberately ZERO bastion-* dependencies — this crate
 # knows nothing about ExtensionManifest/PermissionSet/Capability; it only
 # knows how to run a wasm32 module with no imports and a fuel budget, and
@@ -19,7 +19,7 @@ edition = "2021"
 # (repeated `ld terminated with signal 7 [Bus error]` even after a full
 # `cargo clean` + rebuild). `wasmi` is ~30 transitive crates, builds in
 # seconds, and its per-binary footprint is negligible by comparison — see
-# `docs/revamp/LOOP-REPORT.md` for the measured numbers. Same security
+# `docs/ARCHITECTURE.md` for the measured numbers. Same security
 # property either way: an empty `Linker` gives the guest zero ambient
 # authority, and both crates support fuel metering to bound compute.
 [lints.rust]

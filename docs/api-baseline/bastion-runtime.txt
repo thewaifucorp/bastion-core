@@ -38,6 +38,7 @@ fn agent/loop_.rs:run_turn_for
 fn agent/loop_.rs:run_turn_for_with_trust
 fn agent/loop_.rs:with_auth_resolver
 fn agent/loop_.rs:with_backend_profile
+fn agent/loop_.rs:with_deployment_context
 fn agent/loop_.rs:with_permission_gate
 fn agent/loop_.rs:with_permission_timeout
 fn agent/loop_.rs:with_runtime_registry
@@ -51,10 +52,12 @@ trait agent/ports.rs:ApprovalGate
 trait agent/ports.rs:AuthResolver
 trait agent/ports.rs:CommandHandler
 enum agent/ports.rs:CommandResult
+trait agent/ports.rs:EffectAuditor
 trait agent/ports.rs:FailureSink
 trait agent/ports.rs:GoalPort
 struct agent/ports.rs:PendingPermission
 trait agent/ports.rs:PermissionGate
+trait agent/ports.rs:PolicyAuthority
 trait agent/ports.rs:PreCompactionFlush
 trait agent/ports.rs:ProviderResolver
 struct agent/ports.rs:RespondOutcome

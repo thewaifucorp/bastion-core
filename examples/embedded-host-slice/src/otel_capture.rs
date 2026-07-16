@@ -1,4 +1,4 @@
-//! Component 6 (`docs/revamp/C3-m5-second-consumer-design.md`
+//! Component 6 (`docs/ARCHITECTURE.md`
 //! §"Componentes"): "OTel neutro correlacionável" — the kernel emits its own
 //! generic GenAI spans (`gen_ai.*` attributes, SEAM #4) with zero knowledge
 //! of the host's business object; the HOST correlates a span back to its own
@@ -54,7 +54,7 @@ impl SpanExporter for CapturingExporter {
 ///
 /// MUST run before `AgentLoop::new()` — otherwise spans created inside the
 /// kernel are silently dropped by a no-op tracer (the same PITFALL 6
-/// `src/main.rs`'s `init_otel_provider` documents for the real app).
+/// the embedding product's telemetry initialization documents).
 pub fn init_otel(exporter: CapturingExporter) -> SdkTracerProvider {
     let provider = SdkTracerProvider::builder()
         .with_simple_exporter(exporter)

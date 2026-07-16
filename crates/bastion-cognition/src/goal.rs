@@ -34,7 +34,7 @@ impl Default for ScoringConfig {
 // ---------------------------------------------------------------------------
 
 /// A persisted goal row. Moved to `bastion_types::Goal` (M2 3b — plain data;
-/// `docs/revamp/LOOP-REPORT.md` finding #2). Re-exported here so every existing
+/// `docs/ARCHITECTURE.md` finding #2). Re-exported here so every existing
 /// `crate::goal::Goal` path (and downstream code in this module) keeps
 /// compiling unchanged.
 pub use bastion_types::Goal;

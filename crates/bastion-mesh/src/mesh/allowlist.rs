@@ -136,7 +136,7 @@ mod tests {
     }
 
     // Relocated from `bastion-memory`'s `sqlite.rs` (M2 step 4 — extraction of the
-    // `bastion-memory` crate, docs/revamp/M1-ADR-substrate-split.md, V4 "memory → mesh"
+    // `bastion-memory` crate, docs/ARCHITECTURE.md, V4 "memory → mesh"
     // edge). These exercise `SqliteMemory` (a real DB round trip) together with
     // `filter_for_mesh` — cross-cutting integration coverage between the memory
     // backend and the mesh privacy filter. `bastion-memory` cannot depend on `mesh`

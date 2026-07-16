@@ -5,7 +5,7 @@
 //! per-deployment (cloud personal use with unlimited CC). NOT the OSS default.
 //! ponytail: justified by the unlimited-CC constraint; see decisions/structured-output-strategy.md.
 //!
-//! **DEPRECATED (A-09, `docs/revamp/BACKLOG.md`):** superseded by `AgentRuntime`
+//! **DEPRECATED (A-09, `docs/ARCHITECTURE.md`):** superseded by `AgentRuntime`
 //! (`bastion-agent-runtime`'s `CodexAppServerRuntime`/`AcpxAgentRuntime`, A-03/A-04) — a
 //! proven substitute with structured sessions/events, real tool-call surfacing, and no
 //! egress/approval/budget bypass. This module now only compiles behind the

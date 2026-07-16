@@ -1,5 +1,5 @@
 //! `bastion-extension-wasm` — the `Wasm` mechanism's sandbox
-//! (`docs/revamp/C3-extension-protocol-design.md` §2, M4-08).
+//! (`docs/ARCHITECTURE.md` §2, M4-08).
 //!
 //! Deliberately ZERO bastion-* dependencies: this crate knows nothing about
 //! `ExtensionManifest`/`PermissionSet`/`Capability` — it only knows how to

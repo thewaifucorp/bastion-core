@@ -192,7 +192,7 @@ impl fmt::Display for FailureKind {
 /// Privacy tier consumed by persona/soul.rs (plan 03) and hooks/egress.rs (plan 04).
 /// Moved here from `src/memory/mod.rs` (M2 3b — vocabulary shared across the
 /// kernel/product boundary, not memory-store logic itself; see
-/// `docs/revamp/LOOP-REPORT.md` finding #2).
+/// `docs/ARCHITECTURE.md` finding #2).
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PrivacyTier {
@@ -202,7 +202,7 @@ pub enum PrivacyTier {
 
 /// A persisted goal row (GOAL-01). Moved here from `src/goal/mod.rs` (M2 3b —
 /// plain data/vocabulary; `GoalEngine` and its SQL-backed impls stay in
-/// `src/goal/mod.rs`, see `docs/revamp/LOOP-REPORT.md` finding #2).
+/// `src/goal/mod.rs`, see `docs/ARCHITECTURE.md` finding #2).
 #[derive(Debug, Clone, Serialize)]
 pub struct Goal {
     pub id: i64,
@@ -458,7 +458,7 @@ pub struct McpServerEntry {
 
 /// Status of a queued approval row (SEC-01). Moved here from
 /// `bastion-runtime`'s `capability/approval.rs` (Ciclo 2.1,
-/// `docs/revamp/C2-approval-port-design.md` §1) — pure vocabulary shared by
+/// `docs/SECURITY-INVARIANTS.md` §1) — pure vocabulary shared by
 /// the `ApprovalGate` port and any future consumer/adapter. TEXT-encoded in
 /// sqlite (app-layer enum, mirrors `Belief`'s `kind`/`tier` TEXT-enum
 /// convention rather than a SQL CHECK constraint); the encode/decode helpers
@@ -510,8 +510,8 @@ pub struct ApprovalRow {
     pub executed_at: Option<i64>,
 }
 
-/// Scope of a denied approval (Ciclo 2.1, `docs/revamp/C2-approval-port-design.md`
-/// §3 — `docs/revamp/LOOP-REPORT.md` finding #5.5): denying a single tool-call
+/// Scope of a denied approval (Ciclo 2.1, `docs/SECURITY-INVARIANTS.md`
+/// §3 — `docs/ARCHITECTURE.md` finding #5.5): denying a single tool-call
 /// does not stop a capable model from reaching the same intent through a
 /// different, ungated tool. `Turn` closes that gap fail-closed; `Instance` is
 /// reserved for a future "deny just this one" UX (not wired to any producer
@@ -550,7 +550,7 @@ pub enum ApprovalOutcome {
     /// A brand-new row was inserted. Do not dispatch — awaiting owner approval.
     NewlyQueued(i64),
     /// The owner explicitly rejected this row (Ciclo 2.1 — behavior change,
-    /// `docs/revamp/C2-approval-port-design.md` §2): callers must surface
+    /// `docs/SECURITY-INVARIANTS.md` §2): callers must surface
     /// this as `Err(BastionError::ApprovalDenied)`, never the same
     /// `Ok({awaiting_approval: true})` shape `AlreadyPending`/`NewlyQueued`
     /// produce. Carries the scope the tool-loop must enforce.
@@ -575,7 +575,7 @@ pub enum BastionError {
     #[error("Privacy egress blocked: local-only context bound for non-Ollama provider")]
     PrivacyEgressBlocked,
     /// SEC-01 approval explicitly denied by the owner (Ciclo 2.1 — behavior
-    /// change, `docs/revamp/C2-approval-port-design.md` §2). Deliberate
+    /// change, `docs/SECURITY-INVARIANTS.md` §2). Deliberate
     /// symmetry with `PrivacyEgressBlocked`: callers `downcast_ref::<BastionError>()`
     /// to distinguish "denied" from every other error, exactly like the
     /// egress gate's caught-error. `scope` decides how the kernel tool-loop
@@ -594,7 +594,7 @@ pub enum BastionError {
     /// Identity error — Agent Card sign/verify failures (SEC-06).
     #[error("Identity error: {0}")]
     IdentityError(String),
-    /// Ciclo 2.4 (`docs/revamp/C2-backend-profile-design.md` §3/§5.6):
+    /// Ciclo 2.4 (`docs/SUPPORT-MATRIX.md` §3/§5.6):
     /// a runtime-backed turn (`ConversationBackend::Runtime(id)`) could not
     /// be served — `id` unregistered/unhealthy at turn start
     /// (`RuntimeRegistry::resolve`), the adapter's `start`/`resume`/`submit`
@@ -604,7 +604,7 @@ pub enum BastionError {
     /// owner).
     #[error("Agent runtime backend unavailable: {0}")]
     BackendUnavailable(String),
-    /// Loop 3-D (`docs/revamp/C3-cloud-ready-design.md`, security point 1):
+    /// Loop 3-D (`docs/ARCHITECTURE.md`, security point 1):
     /// a [`crate::secret::SecretResolver`] could not find material for the
     /// named reference. Carries ONLY the reference name — never a partial
     /// or attempted value — so this error is always safe to log/trace/

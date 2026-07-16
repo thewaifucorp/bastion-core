@@ -43,7 +43,7 @@
 //!   "result":{"decision":"accept"|"decline"}}` (verified live: a `decline`
 //!   response genuinely blocks the file write, `accept` lets it through).
 //!   This is a materially stronger bridge than the acpx adapter's
-//!   `HarnessOwned` — a key differentiator, see `docs/revamp/A-05`.
+//!   `HarnessOwned` — a key differentiator documented in `docs/SUPPORT-MATRIX.md`.
 //! - `policy_coverage.sandbox`: **detected, not a constant** (Ciclo 2.2,
 //!   A-05 §5.2 / LOOP-REPORT finding #5). On a host without working
 //!   bubblewrap/user-namespaces (verified live in this sandboxed dev
@@ -1133,7 +1133,7 @@ impl RuntimeSession for CodexSession {
             .await
             .map_err(RuntimeError::Unavailable)?;
 
-        // Ciclo 2.2 (`docs/revamp/C2-approval-port-design.md` §3, A-05
+        // Ciclo 2.2 (`docs/SECURITY-INVARIANTS.md` §3, A-05
         // §5.5 / LOOP-REPORT finding #5.5): a `Turn`-scoped denial closes
         // the alternate-tool-routing gap at the adapter boundary — the
         // declined tool call is blocked by the `decline` response above,

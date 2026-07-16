@@ -15,7 +15,7 @@
 //! The `approval_queue` table itself was created in Plan 11-01
 //! (`src/session/sqlite.rs::init_schema`).
 //!
-//! Ciclo 2.1 (`docs/revamp/C2-approval-port-design.md` §1): `ApprovalStatus`,
+//! Ciclo 2.1 (`docs/SECURITY-INVARIANTS.md` §1): `ApprovalStatus`,
 //! `ApprovalRow`, `ApprovalOutcome` moved to `bastion-types` (pure vocabulary,
 //! no SQLite logic) and re-exported here under their old path. `ApprovalQueue`
 //! is renamed `SqliteApprovalGate` and implements the `ApprovalGate` port
@@ -83,7 +83,7 @@ fn read_row_by_id(conn: &Connection, id: i64) -> anyhow::Result<Option<ApprovalR
 /// Translate an existing row's state into the outcome `enqueue_or_reuse` should
 /// report.
 ///
-/// Ciclo 2.1 (behavior change, `docs/revamp/C2-approval-port-design.md` §2): a
+/// Ciclo 2.1 (behavior change, `docs/SECURITY-INVARIANTS.md` §2): a
 /// `Rejected` row now surfaces as `ApprovalOutcome::Rejected(DenyScope::Turn)`
 /// — never the same `AlreadyPending` outcome an undecided row reports. The
 /// FIRST time this happens for a given row, the row is atomically consumed
@@ -326,7 +326,7 @@ impl ApprovalGate for SqliteApprovalGate {
     }
 }
 
-/// The explicit fail-closed default (Ciclo 2.1, `docs/revamp/C2-approval-port-design.md`
+/// The explicit fail-closed default (Ciclo 2.1, `docs/SECURITY-INVARIANTS.md`
 /// §1): replaces the pre-port `Option::None` "no queue wired" state.
 /// `CapabilityRegistry::new()` wires this in by default — a capability with
 /// `needs_approval()==true` is unusable (denied) until a real gate (e.g.
@@ -532,7 +532,7 @@ mod tests {
         assert_eq!(bob_pending.len(), 1);
     }
 
-    // --- Ciclo 2.1 (docs/revamp/C2-approval-port-design.md §2): typed
+    // --- Ciclo 2.1 (docs/SECURITY-INVARIANTS.md §2): typed
     // rejection + one-time consumption ---------------------------------
 
     #[tokio::test]

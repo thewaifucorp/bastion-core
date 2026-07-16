@@ -1,5 +1,5 @@
 //! `BackendProfile` / `ConversationBackend` / `RuntimeRegistry` — Ciclo 2.4
-//! (`docs/revamp/C2-backend-profile-design.md`).
+//! (`docs/SUPPORT-MATRIX.md`).
 //!
 //! Kernel-side routing policy: decides, per owner/session, whether a turn is
 //! served by Bastion's own tool-loop (`ConversationBackend::Model`, today's

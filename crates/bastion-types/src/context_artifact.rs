@@ -1,11 +1,11 @@
 //! Versioned, opaque context artifact — the M1 ADR's minimal contract for
 //! propagating a rule/policy update to running agents without a
-//! rebuild/redeploy (`docs/revamp/M1-ADR-substrate-split.md` §"APIs públicas
+//! rebuild/redeploy (`docs/ARCHITECTURE.md` §"APIs públicas
 //! mínimas": `VersionedContextArtifact`/`ContextRevision`).
 //!
 //! This is the contract's ORIGIN, not a pre-existing API this crate merely
 //! documents: neither type existed anywhere in the substrate before the M5
-//! second-consumer slice (`docs/revamp/C3-m5-second-consumer-design.md`
+//! second-consumer slice (`docs/ARCHITECTURE.md`
 //! §M5.1) needed to exercise "rule propagation" end-to-end — a LOOP-REPORT
 //! finding, closed here with the conservative minimum the design doc asks
 //! for: "o OSS só precisa do artefato opaco versionado + provenance +

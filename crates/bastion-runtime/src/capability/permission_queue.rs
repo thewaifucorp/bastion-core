@@ -1,4 +1,4 @@
-//! Loop 3-A / 6a (`docs/revamp/C3-runtime-followups-design.md` §6a):
+//! Loop 3-A / 6a (`docs/ARCHITECTURE.md` §6a):
 //! owner-scoped, persisted cross-turn queue for a harness's
 //! [`bastion_agent_runtime::RuntimeEvent::PermissionRequest`] events.
 //!

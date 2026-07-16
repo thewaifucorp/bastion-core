@@ -5,7 +5,7 @@ All notable changes to `bastion-core` are documented here. Format follows
 [docs/VERSIONING.md](docs/VERSIONING.md) (per-crate, not a single workspace
 version).
 
-## [0.1.0] — 2026-07-14
+## 0.1.0 — 2026-07-14
 
 ### Added
 
@@ -32,5 +32,3 @@ the substrate crates:
 
 `bastion-agent` (the personal-agent product) is the flagship consumer and
 continues in its own repository, depending on these crates.
-
-[0.1.0]: https://github.com/thewaifucorp/bastion-core/releases/tag/v0.1.0

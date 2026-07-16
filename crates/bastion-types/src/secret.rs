@@ -1,5 +1,5 @@
 //! Secret-by-reference primitives — C3 cloud-ready contract, security point 1
-//! (`docs/revamp/C3-cloud-ready-design.md`): config and manifests carry a
+//! (`docs/ARCHITECTURE.md`): config and manifests carry a
 //! [`SecretRef`] (the secret's NAME), never a value. The actual material is
 //! resolved exactly once — at boot, or at extension-activation time — by
 //! whatever [`SecretResolver`] the deployment injects (an env var, a mounted

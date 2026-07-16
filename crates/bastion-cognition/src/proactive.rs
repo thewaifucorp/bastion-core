@@ -22,7 +22,7 @@ use crate::goal::GoalEngine;
 /// Multiple methods can send messages into `pending_tx`; the daemon selects from
 /// `pending_rx` only between turns (PROACT-05 structural guarantee).
 ///
-/// 6d (`docs/revamp/C3-runtime-followups-design.md`): every item is a
+/// 6d (`docs/ARCHITECTURE.md`): every item is a
 /// [`PendingItem`] tagged with the owner it is FOR — the daemon's consumer
 /// routes by that identity instead of always assuming `DEFAULT_OWNER`.
 pub struct CronService {

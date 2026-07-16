@@ -2,7 +2,7 @@
 //! depend on abstract capabilities instead of concrete product/cognition types.
 //!
 //! This is the in-monolith half of the M2 substrate split
-//! (`docs/revamp/M2-ports-design.md`): the traits below are introduced and the
+//! (`docs/ARCHITECTURE.md`): the traits below are introduced and the
 //! loop is wired to depend on them, but no file moves crate yet — that is a
 //! separate step (3b). Behavior is unchanged; only the seam is added.
 
@@ -98,7 +98,7 @@ pub trait ToolSource: Send + Sync {
 }
 
 /// SEC-01 — owner-scoped, idempotent approval gate port (Ciclo 2.1,
-/// `docs/revamp/C2-approval-port-design.md` §1).
+/// `docs/SECURITY-INVARIANTS.md` §1).
 ///
 /// Absorbs `ApprovalQueue` as a trait: the EXACT surface
 /// `CapabilityRegistry::invoke` (Policy 2) and `AgentLoop::approval_resolution`
@@ -145,7 +145,7 @@ pub trait ApprovalGate: Send + Sync {
     async fn record_executed(&self, id: i64, result: &serde_json::Value) -> anyhow::Result<()>;
 }
 
-/// Loop 3-A (6a, `docs/revamp/C3-runtime-followups-design.md` §6a): one
+/// Loop 3-A (6a, `docs/ARCHITECTURE.md` §6a): one
 /// harness [`bastion_agent_runtime::RuntimeEvent::PermissionRequest`] parked
 /// pending a decision — either an explicit later-turn answer or a
 /// fail-closed timeout.
@@ -232,7 +232,7 @@ pub trait PermissionGate: Send + Sync {
     ) -> anyhow::Result<PendingPermission>;
 }
 
-/// M4-07 (`docs/revamp/A-01-agentruntime-contract.md` §5 req 11 — "AuthProfileRef
+/// M4-07 (`docs/SUPPORT-MATRIX.md` §5 req 11 — "AuthProfileRef
 /// inválido → Auth tipado sem vazamento de secret"): verifies a
 /// [`bastion_agent_runtime::AuthProfileRef`] resolves to something usable
 /// BEFORE a runtime-backed session is started.

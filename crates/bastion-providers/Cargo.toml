@@ -9,7 +9,7 @@ unsafe_code = "forbid"
 [lints.clippy]
 all = "warn"
 
-# A-09 (docs/revamp/BACKLOG.md): the terminal-agent provider (`claude -p`/opencode via
+# A-09 (docs/ARCHITECTURE.md): the terminal-agent provider (`claude -p`/opencode via
 # stdout — achata mensagens em prompt, não preserva sessão/eventos, deixa tools internas
 # do CLI escaparem de egress/approval/budget) is legacy compatibility bridge, superseded by
 # the proven `AgentRuntime` substitute (A-03/A-04, `bastion-agent-runtime`). Feature-gated

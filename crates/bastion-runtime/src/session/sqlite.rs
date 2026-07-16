@@ -11,7 +11,7 @@ fn open_conn(path: &str) -> rusqlite::Result<rusqlite::Connection> {
     Ok(conn)
 }
 
-/// Ciclo 2.4 (`docs/revamp/C2-backend-profile-design.md` §3 mode 3):
+/// Ciclo 2.4 (`docs/SUPPORT-MATRIX.md` §3 mode 3):
 /// `Clone` added so a delegated task's spawned tokio task (which outlives the
 /// `run_turn_for` call that started it) can hold its own handle to persist/
 /// delete its `runtime_sessions` row without borrowing `AgentLoop` — cheap
@@ -146,7 +146,7 @@ impl SessionManager {
                     expires_at INTEGER NOT NULL
                 );
 
-                -- Ciclo 2.4 (docs/revamp/C2-backend-profile-design.md §3):
+                -- Ciclo 2.4 (docs/SUPPORT-MATRIX.md §3):
                 -- persisted AgentRuntime SessionHandle for restart recovery.
                 -- `key` is caller-chosen: the Bastion session_id for a
                 -- runtime-backed conversation (mode 2), or a per-task key for
@@ -160,7 +160,7 @@ impl SessionManager {
                     updated_at   INTEGER NOT NULL
                 );
 
-                -- Loop 3-A / 6a (docs/revamp/C3-runtime-followups-design.md
+                -- Loop 3-A / 6a (docs/ARCHITECTURE.md
                 -- section 6a): owner-scoped, persisted cross-turn queue for a
                 -- harness's PermissionRequest events. `id` is Bastion's own
                 -- identity (the correlation key a later turn resolves by);
@@ -351,7 +351,7 @@ impl SessionManager {
             // result from the SAME round (Ciclo 2.1: `dispatch_tool_loop` appends
             // one Tool row per `tool_calls` entry, sequentially, for a
             // multi-tool-call round — e.g. the "denied tool + a skipped-not-executed
-            // tool" pairing DenyScope::Turn produces, `docs/revamp/C2-approval-port-design.md`
+            // tool" pairing DenyScope::Turn produces, `docs/SECURITY-INVARIANTS.md`
             // §3 — the second and later Tool rows in that same round were
             // previously and incorrectly rejected as orphaned). Tool after
             // User/System/nothing is still rejected — unchanged.
@@ -470,7 +470,7 @@ impl SessionManager {
         .await?
     }
 
-    /// Ciclo 2.4 (`docs/revamp/C2-backend-profile-design.md` §3): persists an
+    /// Ciclo 2.4 (`docs/SUPPORT-MATRIX.md` §3): persists an
     /// `AgentRuntime::SessionHandle` under a caller-chosen `key`, upserting on
     /// a re-save (e.g. a re-issued handle after `resume`). `key` is the
     /// Bastion session_id for a runtime-backed conversation (mode 2), or a

@@ -4,7 +4,7 @@ This repo (`bastion-core`) is a Cargo workspace with two tiers of crate,
 each with a different versioning contract. Both are pre-1.0 today; this
 document says what "pre-1.0" is allowed to mean here, and what changes once
 a crate crosses 1.0. A third tier — the **App** — is the product version of
-[bastion-agent](https://github.com/thewaifucorp/bastion-agent), which
+`bastion-agent`, which
 consumes these crates as a dependency; it is bumped on releases, not on API
 shape, and is out of scope for this document.
 
@@ -13,7 +13,7 @@ shape, and is out of scope for this document.
 | Tier | Crates | Contract |
 |---|---|---|
 | **Kernel** | `bastion-types`, `bastion-runtime`, `bastion-memory` | Strict semver **once at 1.0**. Pre-1.0: see below. |
-| **Extensions** | `bastion-providers`, `bastion-mcp`, `bastion-agent-runtime`, `bastion-cognition`, `bastion-personas`, `bastion-mesh` | Semver-shaped but looser: 0.x for the foreseeable future, breaking changes land on a minor bump with a migration note (§3). |
+| **Extensions** | `bastion-providers`, `bastion-mcp`, `bastion-agent-runtime`, `bastion-cognition`, `bastion-personas`, `bastion-mesh`, `bastion-extension-protocol`, `bastion-extension-wasm` | Semver-shaped but looser: 0.x for the foreseeable future, breaking changes land on a minor bump with a migration note (§3). |
 
 The kernel/extension split, the dependency allowlist between them, and the
 rationale for which crate hosts what are enforced by
@@ -96,9 +96,8 @@ migration note is not sufficient — the version number tells a consumer
 
 Minimum Supported Rust Version tracks whatever toolchain this repository's
 CI currently builds with — **no explicit lower bound is promised below
-current stable**. As of this writing that is `rustc 1.97.0` / `cargo
-1.97.0` (`rust-toolchain` / CI's `dtolnay/rust-toolchain@stable`). Bumping
-the toolchain CI builds against is not itself treated as a breaking change
+current stable**. CI installs `dtolnay/rust-toolchain@stable`; the repository
+does not pin a `rust-toolchain` file. Moving with stable is not itself treated as a breaking change
 to any crate's semver (consistent with most of the pre-1.0 Rust ecosystem);
 it is called out in the PR that bumps it so downstream consumers on an
 older toolchain notice.

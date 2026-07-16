@@ -1,4 +1,4 @@
-//! Component 2 (`docs/revamp/C3-m5-second-consumer-design.md` §"Componentes"):
+//! Component 2 (`docs/ARCHITECTURE.md` §"Componentes"):
 //! authoritative context injection via `TurnContextProvider` (SEAM #2) — no
 //! patch to the kernel, just a public trait implementation.
 //!

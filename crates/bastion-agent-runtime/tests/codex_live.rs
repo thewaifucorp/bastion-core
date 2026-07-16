@@ -192,7 +192,7 @@ async fn codex_conformance_live_approval_bridge() {
     // gated the same way, and the file ends up written anyway through that
     // second path. This is a genuine A-01 threat-model finding (T4-adjacent:
     // approval bridging gates the tool-call INSTANCE, not the model's goal)
-    // rather than a defect in this adapter's bridge — see docs/revamp/A-05.
+    // rather than a defect in this adapter's bridge — see docs/SUPPORT-MATRIX.md.
     eprintln!(
         "NOTE: permission_bridge_deny not hard-asserted — see comment above (live finding: \
          model can route around a single denial via an alternate tool call)"

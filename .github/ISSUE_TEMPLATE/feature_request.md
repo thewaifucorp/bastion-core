@@ -15,7 +15,7 @@ New trait? New crate? Extension to an existing port (`Provider`, `Memory`,
 `TurnContextProvider`, ...)? Sketch the API if you have one in mind.
 
 **Does this fit "mechanism, not orchestrator"?**
-See the architecture laws in `AGENTS.md` — new behavior should enter as a
+See the architecture laws in `docs/ARCHITECTURE.md` — new behavior should enter as a
 trait impl or an MCP server, not a change to the core loop's control flow.
 
 **Alternatives considered**

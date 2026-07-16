@@ -1,4 +1,4 @@
-//! Components 3 and 4 (`docs/revamp/C3-m5-second-consumer-design.md`
+//! Components 3 and 4 (`docs/ARCHITECTURE.md`
 //! §"Componentes"): a dynamic, OBJECT-SCOPED capability registered through
 //! the public `CapabilityRegistry` API, denied by the host's OWN
 //! authorization policy — a different flavor of "own rule" than
@@ -76,7 +76,7 @@ impl Capability for ApproveObjectCapability {
 }
 
 /// The host's OWN authorization policy (Ciclo 2.1,
-/// `docs/revamp/C2-approval-port-design.md` §1) — a minimal, synchronous
+/// `docs/SECURITY-INVARIANTS.md` §1) — a minimal, synchronous
 /// `ApprovalGate` implementation, no SQLite at all. Denies any capability
 /// whose `args.object_status` is not the one status this host considers
 /// "cleared" — a business-rule shape distinct from `ThresholdDenyGate`'s

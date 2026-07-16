@@ -84,7 +84,7 @@
 //! a separate `~/.local/share/opencode/auth.json` acpx's matcher doesn't
 //! know about), and `fail` aborts before the real, working, host-persisted
 //! opencode credentials ever get a chance to answer — verified live
-//! (`docs/revamp/A-05-conformance-matrix.md` §2A): the identical invocation
+//! (`docs/SUPPORT-MATRIX.md` §2A): the identical invocation
 //! with `--auth-policy skip` completes a full turn using those same
 //! credentials. [`default_auth_policy_for`] picks `"skip"` for `"opencode"`
 //! and `"fail"` for everything else (never a security relaxation for an
@@ -357,7 +357,7 @@ impl AgentRuntime for AcpxAgentRuntime {
 impl FaultInjection for AcpxAgentRuntime {
     // All defaults (false): inducing a crash/auth-failure/garbage-frame on a
     // *live* external harness is out of scope for this adapter — those
-    // conformance checks report Skip against it. See docs/revamp/A-05.
+    // conformance checks report Skip against it. See docs/SUPPORT-MATRIX.md.
 }
 
 fn sanitize_for_session_name(s: &str) -> String {
