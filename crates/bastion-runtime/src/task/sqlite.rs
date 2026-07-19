@@ -403,6 +403,32 @@ impl TaskStore for SqliteTaskStore {
         .await?
     }
 
+    async fn list_children(
+        &self,
+        owner: &str,
+        parent: &TaskCaseId,
+    ) -> anyhow::Result<Vec<TaskCase>> {
+        let path = self.db_path.clone();
+        let owner = owner.to_string();
+        let parent_id = parent.as_str().to_string();
+        spawn_blocking(move || {
+            let conn = open_conn(&path)?;
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {CASE_READ_COLUMNS} FROM task_cases WHERE owner_id = ?1 \
+                 AND parent_id = ?2 ORDER BY created_at ASC"
+            ))?;
+            let raws = stmt
+                .query_map(rusqlite::params![owner, parent_id], read_case_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            let cases = raws
+                .into_iter()
+                .map(raw_to_case)
+                .collect::<anyhow::Result<Vec<TaskCase>>>()?;
+            Ok::<_, anyhow::Error>(cases)
+        })
+        .await?
+    }
+
     async fn update_case(&self, case: &TaskCase, expected_revision: u64) -> anyhow::Result<u64> {
         let path = self.db_path.clone();
         let fields = case_fields(case)?;

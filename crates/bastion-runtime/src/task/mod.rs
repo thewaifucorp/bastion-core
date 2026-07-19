@@ -24,6 +24,7 @@
 mod contract;
 mod cycle;
 mod event;
+mod orchestration;
 mod ports;
 mod sqlite;
 mod store;
@@ -36,6 +37,7 @@ pub use contract::{
 };
 pub use cycle::AdaptiveCycle;
 pub use event::TaskLifecycleEvent;
+pub use orchestration::{ChildSummary, Orchestrator};
 pub use ports::{ActionOutcome, ChosenStep, Chooser, CycleHistory, TaskExecutor, Verifier};
 pub use sqlite::SqliteTaskStore;
 pub use store::TaskStore;

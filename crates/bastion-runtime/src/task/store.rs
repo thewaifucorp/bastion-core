@@ -38,6 +38,15 @@ pub trait TaskStore: Send + Sync {
     /// All cases owned by `owner`, newest first.
     async fn list_cases_for_owner(&self, owner: &str) -> anyhow::Result<Vec<TaskCase>>;
 
+    /// All child cases of `parent`, scoped to `owner`, oldest first. Used by
+    /// the orchestrator to supervise delegated children (provenance/control,
+    /// not a scheduling graph).
+    async fn list_children(
+        &self,
+        owner: &str,
+        parent: &TaskCaseId,
+    ) -> anyhow::Result<Vec<TaskCase>>;
+
     /// Rewrite every mutable field of `case` (as it stands in memory) with
     /// optimistic concurrency: succeeds only if the stored row's revision is
     /// still `expected_revision`, in which case the new revision becomes
