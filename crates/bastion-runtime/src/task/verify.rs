@@ -132,9 +132,7 @@ mod tests {
             // ...LLM judge decides.
             Arc::new(FixedLayer(
                 VerificationStatus::Succeeded,
-                VerdictProvenance::LlmJudge {
-                    model: "m".into(),
-                },
+                VerdictProvenance::LlmJudge { model: "m".into() },
             )),
             // never reached
             Arc::new(FixedLayer(
@@ -147,7 +145,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(verdict.status, VerificationStatus::Succeeded);
-        assert!(matches!(verdict.provenance, VerdictProvenance::LlmJudge { .. }));
+        assert!(matches!(
+            verdict.provenance,
+            VerdictProvenance::LlmJudge { .. }
+        ));
     }
 
     #[tokio::test]
@@ -172,9 +173,7 @@ mod tests {
             )),
             Arc::new(FixedLayer(
                 VerificationStatus::Succeeded,
-                VerdictProvenance::LlmJudge {
-                    model: "m".into(),
-                },
+                VerdictProvenance::LlmJudge { model: "m".into() },
             )),
         ]);
         let verdict = v
@@ -182,6 +181,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(verdict.status, VerificationStatus::Failed);
-        assert!(matches!(verdict.provenance, VerdictProvenance::Deterministic));
+        assert!(matches!(
+            verdict.provenance,
+            VerdictProvenance::Deterministic
+        ));
     }
 }

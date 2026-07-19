@@ -18,7 +18,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::hooks::Observer;
 
-use super::ports::{ActionOutcome, ChosenStep, Chooser, CycleHistory, TaskExecutor, Verifier};
+use super::ports::{ActionOutcome, Chooser, ChosenStep, CycleHistory, TaskExecutor, Verifier};
 use super::store::TaskStore;
 use super::{
     Attempt, AttemptId, BudgetKind, StopReason, TaskCase, TaskCaseId, TaskLifecycleEvent,
@@ -77,7 +77,9 @@ impl AdaptiveCycle {
     }
 
     async fn emit(&self, event: TaskLifecycleEvent) {
-        self.observer.record(event.event_name(), event.metadata()).await;
+        self.observer
+            .record(event.event_name(), event.metadata())
+            .await;
     }
 
     /// Run the case to a terminal or parked (`AwaitingApproval`/`Paused`)
@@ -93,18 +95,19 @@ impl AdaptiveCycle {
         let start = Instant::now();
 
         loop {
-            let mut case = self
-                .store
-                .load_case(owner, case_id)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("adaptive cycle: case {case_id} not found for owner"))?;
+            let mut case = self.store.load_case(owner, case_id).await?.ok_or_else(|| {
+                anyhow::anyhow!("adaptive cycle: case {case_id} not found for owner")
+            })?;
             let mut rev = case.revision;
 
             // Externally-driven terminal/parked states end the drive.
             if case.status.is_terminal() {
                 return Ok(case.status);
             }
-            if matches!(case.status, TaskStatus::Paused | TaskStatus::AwaitingApproval) {
+            if matches!(
+                case.status,
+                TaskStatus::Paused | TaskStatus::AwaitingApproval
+            ) {
                 return Ok(case.status);
             }
 
@@ -112,7 +115,13 @@ impl AdaptiveCycle {
             if cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
                 let _ = self.executor.cancel(&case).await;
                 self.store
-                    .transition_status(owner, case_id, TaskStatus::Cancelled, Some(StopReason::Cancelled), rev)
+                    .transition_status(
+                        owner,
+                        case_id,
+                        TaskStatus::Cancelled,
+                        Some(StopReason::Cancelled),
+                        rev,
+                    )
                     .await?;
                 self.emit(TaskLifecycleEvent::Terminal {
                     owner: owner.to_string(),
@@ -129,7 +138,13 @@ impl AdaptiveCycle {
             let wall_ms = start.elapsed().as_millis() as u64;
             if let Some(kind) = over_budget(&case, attempt_count, wall_ms) {
                 return self
-                    .finish(owner, case_id, TaskStatus::Failed, StopReason::BudgetExceeded(kind), rev)
+                    .finish(
+                        owner,
+                        case_id,
+                        TaskStatus::Failed,
+                        StopReason::BudgetExceeded(kind),
+                        rev,
+                    )
                     .await;
             }
 
@@ -161,25 +176,50 @@ impl AdaptiveCycle {
                     match last_verdict.as_ref().map(|v| v.status) {
                         Some(VerificationStatus::Succeeded) => {
                             return self
-                                .finish(owner, case_id, TaskStatus::Completed, StopReason::Completed, rev)
+                                .finish(
+                                    owner,
+                                    case_id,
+                                    TaskStatus::Completed,
+                                    StopReason::Completed,
+                                    rev,
+                                )
                                 .await;
                         }
                         _ => {
-                            let reason = "completion claimed without a succeeding verdict".to_string();
+                            let reason =
+                                "completion claimed without a succeeding verdict".to_string();
                             return self
-                                .finish(owner, case_id, TaskStatus::Escalated, StopReason::Escalated(reason), rev)
+                                .finish(
+                                    owner,
+                                    case_id,
+                                    TaskStatus::Escalated,
+                                    StopReason::Escalated(reason),
+                                    rev,
+                                )
                                 .await;
                         }
                     }
                 }
                 ChosenStep::Escalate(reason) => {
                     return self
-                        .finish(owner, case_id, TaskStatus::Escalated, StopReason::Escalated(reason), rev)
+                        .finish(
+                            owner,
+                            case_id,
+                            TaskStatus::Escalated,
+                            StopReason::Escalated(reason),
+                            rev,
+                        )
                         .await;
                 }
                 ChosenStep::Impossible(reason) => {
                     return self
-                        .finish(owner, case_id, TaskStatus::Failed, StopReason::Impossible(reason), rev)
+                        .finish(
+                            owner,
+                            case_id,
+                            TaskStatus::Failed,
+                            StopReason::Impossible(reason),
+                            rev,
+                        )
                         .await;
                 }
                 ChosenStep::Act(action) => {
@@ -203,7 +243,13 @@ impl AdaptiveCycle {
                         Err(e) => {
                             let reason = format!("executor error: {e}");
                             return self
-                                .finish(owner, case_id, TaskStatus::Failed, StopReason::Impossible(reason), rev)
+                                .finish(
+                                    owner,
+                                    case_id,
+                                    TaskStatus::Failed,
+                                    StopReason::Impossible(reason),
+                                    rev,
+                                )
                                 .await;
                         }
                     };
@@ -256,7 +302,13 @@ impl AdaptiveCycle {
                         case.pending_approvals.push(approval.clone());
                         rev = self.store.update_case(&case, rev).await?;
                         self.store
-                            .transition_status(owner, case_id, TaskStatus::AwaitingApproval, None, rev)
+                            .transition_status(
+                                owner,
+                                case_id,
+                                TaskStatus::AwaitingApproval,
+                                None,
+                                rev,
+                            )
                             .await?;
                         self.emit(TaskLifecycleEvent::ApprovalPending {
                             owner: owner.to_string(),
@@ -315,7 +367,11 @@ impl AdaptiveCycle {
 
     /// Fetch the most recent attempt's verdict for this case (attempts are
     /// listed oldest-first).
-    async fn last_verdict(&self, owner: &str, case: &TaskCase) -> anyhow::Result<Option<super::Verdict>> {
+    async fn last_verdict(
+        &self,
+        owner: &str,
+        case: &TaskCase,
+    ) -> anyhow::Result<Option<super::Verdict>> {
         let attempts = self.store.list_attempts_for_case(owner, &case.id).await?;
         Ok(attempts.into_iter().rev().find_map(|a| a.verdict))
     }
@@ -358,7 +414,10 @@ fn over_budget(case: &TaskCase, attempt_count: u32, wall_ms: u64) -> Option<Budg
         return Some(BudgetKind::Steps);
     }
     if let Some(max) = b.max_tokens {
-        let total = case.usage.input_tokens.saturating_add(case.usage.output_tokens);
+        let total = case
+            .usage
+            .input_tokens
+            .saturating_add(case.usage.output_tokens);
         if total >= max {
             return Some(BudgetKind::Tokens);
         }

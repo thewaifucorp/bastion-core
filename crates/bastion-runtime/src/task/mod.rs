@@ -38,7 +38,7 @@ pub use contract::{
 pub use cycle::AdaptiveCycle;
 pub use event::TaskLifecycleEvent;
 pub use orchestration::{ChildSummary, Orchestrator};
-pub use ports::{ActionOutcome, ChosenStep, Chooser, CycleHistory, TaskExecutor, Verifier};
+pub use ports::{ActionOutcome, Chooser, ChosenStep, CycleHistory, TaskExecutor, Verifier};
 pub use sqlite::SqliteTaskStore;
 pub use store::TaskStore;
 pub use verify::LayeredVerifier;

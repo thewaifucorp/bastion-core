@@ -73,11 +73,7 @@ impl Orchestrator {
     /// untouched — cancellation preserves work already done. A sibling that is
     /// already terminal (or races to terminal) never blocks cancelling the
     /// rest. Returns how many children were cancelled.
-    pub async fn cancel_children(
-        &self,
-        owner: &str,
-        parent: &TaskCaseId,
-    ) -> anyhow::Result<usize> {
+    pub async fn cancel_children(&self, owner: &str, parent: &TaskCaseId) -> anyhow::Result<usize> {
         let children = self.store.list_children(owner, parent).await?;
         let mut cancelled = 0;
         for c in children {
@@ -116,9 +112,7 @@ impl Orchestrator {
             s.total += 1;
             match c.status {
                 TaskStatus::Completed => s.succeeded += 1,
-                TaskStatus::Failed | TaskStatus::Escalated | TaskStatus::Cancelled => {
-                    s.failed += 1
-                }
+                TaskStatus::Failed | TaskStatus::Escalated | TaskStatus::Cancelled => s.failed += 1,
                 _ => s.in_flight += 1,
             }
         }
@@ -189,9 +183,15 @@ mod tests {
         assert_eq!(kids.len(), 2);
 
         // one child completes, one stays running
-        s.transition_status("alice", &TaskCaseId("c1".into()), TaskStatus::Completed, Some(StopReason::Completed), 1)
-            .await
-            .unwrap();
+        s.transition_status(
+            "alice",
+            &TaskCaseId("c1".into()),
+            TaskStatus::Completed,
+            Some(StopReason::Completed),
+            1,
+        )
+        .await
+        .unwrap();
         let sum = orch.summarize_children("alice", &parent.id).await.unwrap();
         assert_eq!(sum.total, 2);
         assert_eq!(sum.succeeded, 1);
@@ -221,9 +221,15 @@ mod tests {
             .await
             .unwrap();
         // c1 already terminal (completed) — must be left untouched.
-        s.transition_status("alice", &TaskCaseId("c1".into()), TaskStatus::Completed, Some(StopReason::Completed), 1)
-            .await
-            .unwrap();
+        s.transition_status(
+            "alice",
+            &TaskCaseId("c1".into()),
+            TaskStatus::Completed,
+            Some(StopReason::Completed),
+            1,
+        )
+        .await
+        .unwrap();
 
         let cancelled = orch.cancel_children("alice", &parent.id).await.unwrap();
         assert_eq!(cancelled, 1, "only the non-terminal child is cancelled");

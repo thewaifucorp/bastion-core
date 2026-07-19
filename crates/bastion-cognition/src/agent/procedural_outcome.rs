@@ -135,9 +135,17 @@ mod tests {
 
     async fn store_factual(mem: &SharedMemory, owner: &str, content: &str) -> i64 {
         let m = mem.read().await;
-        m.store_belief(owner, None, content, "s", "test", false, Some(PrivacyTier::CloudOk))
-            .await
-            .expect("store_belief")
+        m.store_belief(
+            owner,
+            None,
+            content,
+            "s",
+            "test",
+            false,
+            Some(PrivacyTier::CloudOk),
+        )
+        .await
+        .expect("store_belief")
     }
 
     async fn counts(mem: &SharedMemory, owner: &str, id: i64) -> (i64, i64, i64) {
@@ -262,6 +270,9 @@ mod tests {
         assert!(b.utility() > 0.0, "helpful outcomes lift utility");
         assert!(b.confidence() > 0.5, "many observations lift confidence");
         b.harmful_count = 9;
-        assert!(b.utility().abs() < 0.01, "balanced outcomes net to ~0 utility");
+        assert!(
+            b.utility().abs() < 0.01,
+            "balanced outcomes net to ~0 utility"
+        );
     }
 }

@@ -515,9 +515,8 @@ impl TaskStore for SqliteTaskStore {
                     |r| r.get(0),
                 )
                 .optional()?;
-            let current_status = current_status.ok_or_else(|| {
-                anyhow::anyhow!("transition_status: case not found for owner")
-            })?;
+            let current_status = current_status
+                .ok_or_else(|| anyhow::anyhow!("transition_status: case not found for owner"))?;
             let current: TaskStatus = serde_json::from_str(&current_status)?;
             if current.is_terminal() {
                 anyhow::bail!(
@@ -610,7 +609,14 @@ impl TaskStore for SqliteTaskStore {
                 "INSERT OR IGNORE INTO task_attempts
                     (id, owner_id, task_id, payload_json, started_at, ended_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![attempt_id, owner, task_id, payload_json, started_at, ended_at],
+                rusqlite::params![
+                    attempt_id,
+                    owner,
+                    task_id,
+                    payload_json,
+                    started_at,
+                    ended_at
+                ],
             )?;
             Ok::<_, anyhow::Error>(())
         })
@@ -652,9 +658,7 @@ impl TaskStore for SqliteTaskStore {
                  ORDER BY started_at ASC",
             )?;
             let payloads = stmt
-                .query_map(rusqlite::params![owner, task_id], |r| {
-                    r.get::<_, String>(0)
-                })?
+                .query_map(rusqlite::params![owner, task_id], |r| r.get::<_, String>(0))?
                 .collect::<Result<Vec<_>, _>>()?;
             let attempts = payloads
                 .into_iter()
@@ -960,7 +964,10 @@ mod tests {
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM task_cases", [], |r| r.get(0))
             .expect("count");
-        assert_eq!(count, 1, "second create with the same key must not insert a row");
+        assert_eq!(
+            count, 1,
+            "second create with the same key must not insert a row"
+        );
     }
 
     #[tokio::test]
@@ -1132,7 +1139,11 @@ mod tests {
             .list_attempts_for_case("alice", &case.id)
             .await
             .expect("list");
-        assert_eq!(listed.len(), 1, "duplicate append must not create a second row");
+        assert_eq!(
+            listed.len(),
+            1,
+            "duplicate append must not create a second row"
+        );
     }
 
     #[tokio::test]
@@ -1141,7 +1152,10 @@ mod tests {
         let case = sample_case("t1", "alice");
         store.create_case(&case, "key-1").await.expect("create");
         let attempt = sample_attempt("a1", "t1");
-        store.append_attempt(&attempt).await.expect("append attempt");
+        store
+            .append_attempt(&attempt)
+            .await
+            .expect("append attempt");
 
         let evidence = sample_evidence("e1", "a1");
         store
@@ -1158,7 +1172,10 @@ mod tests {
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM task_evidence", [], |r| r.get(0))
             .expect("count");
-        assert_eq!(count, 1, "duplicate record_evidence must not insert a second row");
+        assert_eq!(
+            count, 1,
+            "duplicate record_evidence must not insert a second row"
+        );
     }
 
     #[tokio::test]
