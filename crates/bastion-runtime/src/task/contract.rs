@@ -214,6 +214,46 @@ impl UsageAccum {
         self.input_tokens = self.input_tokens.saturating_add(input);
         self.output_tokens = self.output_tokens.saturating_add(output);
     }
+
+    /// Sum another accumulator's counters into this one (saturating). Cost is
+    /// added only when both sides report a figure; the merged
+    /// [`BudgetCoverage`] degrades to the least-certain of the two, so a
+    /// single `Unknown`/`Estimated` input never lets an aggregate look more
+    /// precise than its worst source.
+    pub fn merge_from(&mut self, other: &UsageAccum) {
+        self.llm_calls = self.llm_calls.saturating_add(other.llm_calls);
+        self.steps = self.steps.saturating_add(other.steps);
+        self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
+        self.cache_read_tokens = self.cache_read_tokens.saturating_add(other.cache_read_tokens);
+        self.cache_write_tokens = self
+            .cache_write_tokens
+            .saturating_add(other.cache_write_tokens);
+        self.wall_clock_ms = self.wall_clock_ms.saturating_add(other.wall_clock_ms);
+        self.cost_usd = match (self.cost_usd, other.cost_usd) {
+            (Some(a), Some(b)) => Some(a + b),
+            (Some(a), None) => Some(a),
+            (None, b) => b,
+        };
+        self.cost_coverage = least_certain(self.cost_coverage, other.cost_coverage);
+    }
+}
+
+/// Degrade two [`BudgetCoverage`] fidelities to the least certain:
+/// `Unknown` < `Estimated` < `Reported`.
+fn least_certain(a: BudgetCoverage, b: BudgetCoverage) -> BudgetCoverage {
+    fn rank(c: BudgetCoverage) -> u8 {
+        match c {
+            BudgetCoverage::Unknown => 0,
+            BudgetCoverage::Estimated => 1,
+            BudgetCoverage::Reported => 2,
+        }
+    }
+    if rank(a) <= rank(b) {
+        a
+    } else {
+        b
+    }
 }
 
 /// One concrete attempt at a task: the actions it chose, the beliefs it

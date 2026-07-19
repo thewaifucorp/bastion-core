@@ -22,7 +22,9 @@
 //!   cognition, memory internals, channels, UX, or any corporate concept.
 
 mod contract;
+mod cycle;
 mod event;
+mod ports;
 mod sqlite;
 mod store;
 
@@ -31,7 +33,9 @@ pub use contract::{
     EvidenceKind, Frame, Intent, IntentOrigin, NextDecision, OpaqueState, TaskCase, UsageAccum,
     Verdict, VerdictProvenance, VerificationStatus,
 };
+pub use cycle::AdaptiveCycle;
 pub use event::TaskLifecycleEvent;
+pub use ports::{ActionOutcome, ChosenStep, Chooser, CycleHistory, TaskExecutor, Verifier};
 pub use sqlite::SqliteTaskStore;
 pub use store::TaskStore;
 
