@@ -12,8 +12,13 @@ mod agent/mod.rs:dream
 mod agent/mod.rs:identity
 mod agent/mod.rs:memory_rag
 mod agent/mod.rs:procedural
+mod agent/mod.rs:procedural_outcome
 struct agent/procedural.rs:ProceduralBeliefProvider
 fn agent/procedural.rs:new
+struct agent/procedural_outcome.rs:ProceduralLearner
+fn agent/procedural_outcome.rs:attribute
+fn agent/procedural_outcome.rs:new
+fn agent/procedural_outcome.rs:outcome_for
 struct cabinet/mod.rs:CabinetTable
 struct cabinet/mod.rs:Turn
 enum cabinet/mod.rs:TurnKind

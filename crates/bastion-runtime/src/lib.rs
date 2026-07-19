@@ -14,6 +14,7 @@ pub mod hooks;
 pub mod memory;
 pub mod provider;
 pub mod session;
+pub mod task;
 
 /// Internal alias so the files moved verbatim from the monolith keep their
 /// `crate::types::...` import paths compiling unchanged. The actual types
