@@ -14,3 +14,4 @@ pub mod dream;
 pub mod identity;
 pub mod memory_rag;
 pub mod procedural;
+pub mod procedural_outcome;

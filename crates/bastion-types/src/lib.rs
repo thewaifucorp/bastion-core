@@ -303,6 +303,31 @@ pub struct Belief {
     pub supersedes_at: Option<i64>,
 }
 
+impl Belief {
+    /// Outcome utility in `[-1.0, 1.0]`: did acting on this belief tend to
+    /// *help* (positive) or *harm* (negative) the outcomes it was used for?
+    /// Distinct from lexical relevance (does it match the current turn) and
+    /// from [`Self::confidence`] (how much evidence backs the figure). A
+    /// belief with no recorded outcomes has utility `0.0` (neutral).
+    pub fn utility(&self) -> f64 {
+        let total = self.helpful_count + self.harmful_count + self.neutral_count;
+        if total == 0 {
+            return 0.0;
+        }
+        (self.helpful_count - self.harmful_count) as f64 / (total + 1) as f64
+    }
+
+    /// Epistemic confidence in `[0.0, 1.0)`: how much recorded outcome
+    /// evidence backs this belief's [`Self::utility`]. Grows with the number
+    /// of observations (`total / (total + K)`), so a single lucky success
+    /// never reads as certain.
+    pub fn confidence(&self) -> f64 {
+        const K: f64 = 5.0;
+        let total = (self.helpful_count + self.harmful_count + self.neutral_count) as f64;
+        total / (total + K)
+    }
+}
+
 /// A single persona's dissenting stance (Cabinet synthesis, CAB-05/D-07).
 /// Moved here from `src/cabinet/synth.rs` (M2 step 5) — pure `JsonSchema`-deriving
 /// data referenced by `bastion-providers`' ollama.rs GBNF-diagnostic test, which

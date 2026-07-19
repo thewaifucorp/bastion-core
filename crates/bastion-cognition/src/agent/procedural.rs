@@ -64,6 +64,15 @@ fn lexical_overlap(turn_msg: &str, content: &str) -> usize {
         .count()
 }
 
+/// Secondary ranking key (after lexical relevance): the reinforced trail
+/// weight, scaled by how *useful* this belief has proved and how much
+/// evidence backs that (US-105). Outcome history therefore measurably shifts
+/// selection — a belief that repeatedly helped outranks an equally-relevant,
+/// equally-weighted one that never did.
+fn rank_weight(b: &Belief) -> f64 {
+    b.weight * (1.0 + b.utility() * b.confidence())
+}
+
 /// Formata um grupo de beliefs procedurais como bloco opaco. O id entra no texto
 /// de propósito: é o handle de contestação por NL (`/contest <id>`, D-14). O
 /// core NUNCA interpreta este conteúdo como instrução (SEAM #2 boundary rule) —
@@ -121,8 +130,8 @@ impl TurnContextProvider for ProceduralBeliefProvider {
             score_b
                 .cmp(&score_a)
                 .then(
-                    b.weight
-                        .partial_cmp(&a.weight)
+                    rank_weight(b)
+                        .partial_cmp(&rank_weight(a))
                         .unwrap_or(std::cmp::Ordering::Equal),
                 )
                 .then(b.id.cmp(&a.id))
