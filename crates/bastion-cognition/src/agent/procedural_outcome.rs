@@ -6,8 +6,9 @@
 //!
 //! - Only the belief ids the chooser recorded on its action/attempt are
 //!   touched — never every recalled belief.
-//! - A failed attempt reinforces negatively; an unverified one reinforces
-//!   nothing at all (no proof, no signal — Gate C).
+//! - A failed attempt records a harmful outcome (lowering utility) but never
+//!   deposits positive weight; an unverified one records nothing at all (no
+//!   proof, no signal — Gate C).
 //! - Factual beliefs never receive a procedural outcome (kind guard).
 //! - Cross-owner writes are impossible: every mutation goes through the
 //!   memory layer's owner-scoped IDOR guard.
@@ -27,8 +28,8 @@ use bastion_runtime::task::VerificationStatus;
 
 use crate::memory::{BeliefKind, Outcome, SharedMemory};
 
-/// Weight nudge applied to a used procedural belief per helpful/harmful
-/// outcome (the reinforcement layer caps and floors the trail).
+/// Positive weight nudge deposited on a used procedural belief per helpful
+/// outcome (the reinforcement layer caps the trail).
 const REINFORCE_DELTA: f64 = 0.1;
 
 /// Map a terminal verification status to the outcome to attribute. An
@@ -87,13 +88,13 @@ impl ProceduralLearner {
                 continue;
             }
             mem.record_belief_outcome(owner, id, outcome).await?;
-            let delta = match outcome {
-                Outcome::Helpful => REINFORCE_DELTA,
-                Outcome::Harmful => -REINFORCE_DELTA,
-                Outcome::Neutral => 0.0,
-            };
-            if delta != 0.0 {
-                mem.reinforce_belief(owner, id, delta).await?;
+            // The weight trail is a monotonic stigmergic deposit
+            // (`reinforce_belief` rejects negative deltas), so only a helpful
+            // outcome deposits. A harmful outcome's negative signal lives in
+            // `harmful_count`, which lowers `Belief::utility()` and therefore
+            // future ranking — no negative weight nudge is needed or allowed.
+            if outcome == Outcome::Helpful {
+                mem.reinforce_belief(owner, id, REINFORCE_DELTA).await?;
             }
         }
         Ok(())
@@ -182,7 +183,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failure_reinforces_negatively_never_positively() {
+    async fn failure_records_harmful_never_helpful() {
         let f = NamedTempFile::new().unwrap();
         let mem = make_memory(f.path().to_str().unwrap()).await;
         let id = store_procedural(&mem, "alice", "risky shortcut").await;
