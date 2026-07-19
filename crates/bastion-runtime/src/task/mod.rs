@@ -27,6 +27,7 @@ mod event;
 mod ports;
 mod sqlite;
 mod store;
+mod verify;
 
 pub use contract::{
     AcceptanceCriterion, ActionKind, Attempt, Bounds, CandidateAction, CorrelationIds, Evidence,
@@ -38,6 +39,7 @@ pub use event::TaskLifecycleEvent;
 pub use ports::{ActionOutcome, ChosenStep, Chooser, CycleHistory, TaskExecutor, Verifier};
 pub use sqlite::SqliteTaskStore;
 pub use store::TaskStore;
+pub use verify::LayeredVerifier;
 
 use serde::{Deserialize, Serialize};
 
