@@ -23,6 +23,8 @@
 
 mod contract;
 mod event;
+mod sqlite;
+mod store;
 
 pub use contract::{
     AcceptanceCriterion, ActionKind, Attempt, Bounds, CandidateAction, CorrelationIds, Evidence,
@@ -30,6 +32,8 @@ pub use contract::{
     Verdict, VerdictProvenance, VerificationStatus,
 };
 pub use event::TaskLifecycleEvent;
+pub use sqlite::SqliteTaskStore;
+pub use store::TaskStore;
 
 use serde::{Deserialize, Serialize};
 
