@@ -66,6 +66,23 @@ Core never owns channel authentication, sender mapping, application configuratio
 
 The complete set of implemented properties and code evidence lives in [Security invariants](docs/SECURITY-INVARIANTS.md). Backend-specific differences are explicit in the [support matrix](docs/SUPPORT-MATRIX.md).
 
+## Adaptive Execution (task contract)
+
+`bastion-runtime::task` is the neutral, owner-scoped vocabulary the kernel uses to run durable tasks — mechanism, not policy. It defines the three execution modes (`Respond` / `Act` / `Pursue`), the durable `TaskCase` record, a concrete `Attempt`, captured `Evidence` and its `Verdict`, plus the status/stop-reason/budget/correlation machinery.
+
+Deliberate boundaries: no NLP heuristics live here (an `Intent` arrives with its `mode` already decided by the consumer — the kernel never classifies text); no business state (host domain state is carried opaquely in `OpaqueState` and never interpreted); no graph/DAG (a `TaskCase` stores state, evidence, and a single recomputed `NextDecision` — the next step is derived after each observation, not walked from a stored plan).
+
+| Public type | Lifecycle role |
+| --- | --- |
+| `ExecutionMode` | `Respond` (no side effect, no record) · `Act` (one bounded effect, ephemeral record if needed) · `Pursue` (durable, resumable — `requires_durable_case()` is true only here). |
+| `TaskCase` / `TaskCaseId` | The durable, owner-scoped record a `Pursue` objective persists; survives restart. |
+| `Attempt` / `AttemptId` | A concrete step taken against the case. |
+| `Evidence` / `EvidenceId` / `EvidenceKind` | What an attempt observed (diff, artifact, tool result …), captured as data. |
+| `Verdict` / `VerdictProvenance` / `VerificationStatus` | The verifier's judgment on an attempt's evidence. |
+| `AdaptiveCycle`, `Orchestrator`, `TaskStore` / `SqliteTaskStore`, `LayeredVerifier` | Run one cycle, coordinate child tasks (no central DAG), persist cases, and verify — all behind host-replaceable ports (`Chooser`, `TaskExecutor`, `Verifier`). |
+
+`Respond` never touches the store; only `Pursue` mandates a durable `TaskCase`. The host owns activation (which mode a request runs under) and business state; the kernel owns the record and the recomputed next step. `bastion-agent` documents the user-facing side (mode activation, `/task`, `/schedule`, browser, budgets); this crate documents only the contract.
+
 ## Architecture
 
 ```text
@@ -180,6 +197,7 @@ This split is intentional: applications can reuse the governed substrate without
 | [Development](docs/DEVELOPMENT.md) | Repository workflow, code organization, and CI commands. |
 | [Testing](docs/TESTING.md) | Deterministic, ignored, and credentialed test suites. |
 | [Versioning](docs/VERSIONING.md) | API baselines, compatibility, and release policy. |
+| [Pending architecture tasks](docs/tasks/README.md) | Planned changes that are not implemented contracts yet. |
 
 Historical product documentation under `docs/archive/` is preserved for context and is not an implementation reference for this workspace.
 
