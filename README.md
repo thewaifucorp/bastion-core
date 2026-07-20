@@ -197,6 +197,7 @@ This split is intentional: applications can reuse the governed substrate without
 | [Development](docs/DEVELOPMENT.md) | Repository workflow, code organization, and CI commands. |
 | [Testing](docs/TESTING.md) | Deterministic, ignored, and credentialed test suites. |
 | [Versioning](docs/VERSIONING.md) | API baselines, compatibility, and release policy. |
+| [Adaptive task contract](#adaptive-execution-task-contract) | Neutral `Respond`/`Act`/`Pursue` task mechanisms, persistence, verification, and host boundaries. |
 | [Pending architecture tasks](docs/tasks/README.md) | Planned changes that are not implemented contracts yet. |
 
 Historical product documentation under `docs/archive/` is preserved for context and is not an implementation reference for this workspace.

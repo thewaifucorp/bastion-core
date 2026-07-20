@@ -279,7 +279,7 @@ dependencies = [
 
 [[package]]
 name = "bastion-cognition"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "bastion-mcp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -396,7 +396,7 @@ dependencies = [
 
 [[package]]
 name = "bastion-providers"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-openai",
@@ -413,7 +413,7 @@ dependencies = [
 
 [[package]]
 name = "bastion-runtime"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -433,7 +433,7 @@ dependencies = [
 
 [[package]]
 name = "bastion-types"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "schemars 0.8.22",

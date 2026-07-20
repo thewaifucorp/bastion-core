@@ -5,6 +5,34 @@ All notable changes to `bastion-core` are documented here. Format follows
 [docs/VERSIONING.md](docs/VERSIONING.md) (per-crate, not a single workspace
 version).
 
+## Unreleased
+
+## 0.2.0 — 2026-07-20
+
+### Added
+
+- Adaptive Execution task contract in `bastion-runtime`: neutral
+  `Respond`/`Act`/`Pursue` modes, owner-scoped durable `TaskCase`s, attempts,
+  evidence, verdicts, budgets, lifecycle events, storage, verification, and
+  parent/child orchestration behind host-replaceable ports.
+- Deployment-context types and outcome attribution for procedural beliefs.
+- Core README documentation for the task contract and its product boundary.
+
+### Changed
+
+- `bastion-runtime`, `bastion-types`, and `bastion-cognition` advance to
+  `0.1.1` for additive public APIs.
+
+### Fixed
+
+- Procedural-learning reinforcement no longer deposits negative outcomes.
+
+### Removed
+
+- Breaking public API removals advance `bastion-mcp` and `bastion-providers`
+  to `0.2.0`: deprecated MCP helper entry points and the legacy terminal-agent
+  provider bridge are no longer available.
+
 ## 0.1.0 — 2026-07-14
 
 ### Added
