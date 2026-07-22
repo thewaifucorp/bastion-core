@@ -103,6 +103,7 @@ mod tests {
             tier,
             weight: 0.5,
             skills: vec![],
+            ..Default::default()
         }
     }
 

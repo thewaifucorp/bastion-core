@@ -306,6 +306,7 @@ async fn demonstrate_denied_capability(agent: &mut AgentLoop) {
     let ctx = InvokeCtx {
         owner: DEFAULT_OWNER.to_string(),
         privacy_tier: Some(PrivacyTier::CloudOk),
+        allowed_tools: None,
     };
     // Over the host's ThresholdDenyGate threshold (100) — denied synchronously,
     // no queue round-trip.

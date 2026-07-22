@@ -221,6 +221,7 @@ impl CandidateGenerator for LlmCandidateGenerator {
         let forced_ctx = InvokeCtx {
             owner: "reflector".to_owned(),
             privacy_tier: Some(PrivacyTier::LocalOnly),
+            allowed_tools: None,
         };
         let use_forced = !provider.supports_json_schema();
         tracing::debug!(
@@ -533,6 +534,7 @@ impl Reflector {
         let ctx = InvokeCtx {
             owner: owner.to_owned(),
             privacy_tier: Some(PrivacyTier::CloudOk),
+            allowed_tools: None,
         };
         for i in 0..procedural.len() {
             for j in (i + 1)..procedural.len() {

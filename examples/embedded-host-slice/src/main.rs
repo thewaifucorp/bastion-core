@@ -95,6 +95,7 @@ async fn main() -> anyhow::Result<()> {
         tier: PrivacyTier::CloudOk,
         weight: 1.0,
         skills: Vec::new(),
+        ..Default::default()
     };
     let mut personas = HashMap::new();
     personas.insert(PERSONA_NAME.to_string(), persona);
@@ -184,6 +185,7 @@ async fn demonstrate_object_policy_denial(agent: &AgentLoop, capability_name: &s
     let ctx = InvokeCtx {
         owner: OWNER_A.to_string(),
         privacy_tier: Some(PrivacyTier::CloudOk),
+        allowed_tools: None,
     };
     let args = serde_json::json!({"object_status": "pending_review"});
 
@@ -239,6 +241,7 @@ async fn demonstrate_trust_quarantine_preserved(agent: &mut AgentLoop, capabilit
         let ctx = InvokeCtx {
             owner: OWNER_A.to_string(),
             privacy_tier: Some(PrivacyTier::CloudOk),
+            allowed_tools: None,
         };
         let blocked = scope
             .invoke(capability_name, serde_json::json!({}), &ctx)
