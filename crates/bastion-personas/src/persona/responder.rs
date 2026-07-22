@@ -9,6 +9,8 @@
 //! from the `AgentLoop` struct too — it is this module's own field now.
 
 use opentelemetry::trace::Span as _;
+use std::collections::HashSet;
+use std::sync::Arc;
 
 use crate::agent::ports::{RespondOutcome, Responder, TurnContext, TurnKernel};
 use crate::persona::PersonaRegistry;
@@ -79,8 +81,24 @@ impl PersonaResponder {
                 // and get stamped CloudOk — a LocalOnly→cloud downgrade.
                 let resolved_tier: Option<crate::memory::PrivacyTier> =
                     self.registry.get(&pid).map(|p| p.tier);
+                // Persona contract v2 (Policy 0): resolve the SAME persona's
+                // `tools:` allowlist alongside its tier, from the same
+                // `self.registry.get(&pid)` lookup already used above. `None`
+                // (no `tools:` declared, or persona not found) stays
+                // unrestricted — the legacy/back-compat contract.
+                let allowed_tools: Option<Arc<HashSet<String>>> = resolve_allowed_tools(
+                    self.registry.get(&pid),
+                );
                 let text = kernel
-                    .run_tool_loop(history, session_id, &config, response, owner, resolved_tier)
+                    .run_tool_loop(
+                        history,
+                        session_id,
+                        &config,
+                        response,
+                        owner,
+                        resolved_tier,
+                        allowed_tools,
+                    )
                     .await?;
                 // Persist the assistant response (run_tool_loop handles intermediate turns)
                 kernel
@@ -104,8 +122,22 @@ impl PersonaResponder {
                     // the kernel's tool loop (None → blocked, not defaulted to cloud).
                     let resolved_tier: Option<crate::memory::PrivacyTier> =
                         self.registry.get(&pid).map(|p| p.tier);
+                    // Persona contract v2 (Policy 0): same per-persona resolution
+                    // as the Single-dispatch branch above — each parallel
+                    // persona may carry a different `tools:` allowlist.
+                    let allowed_tools: Option<Arc<HashSet<String>>> = resolve_allowed_tools(
+                        self.registry.get(&pid),
+                    );
                     let text = kernel
-                        .run_tool_loop(history, session_id, &config, response, owner, resolved_tier)
+                        .run_tool_loop(
+                            history,
+                            session_id,
+                            &config,
+                            response,
+                            owner,
+                            resolved_tier,
+                            allowed_tools,
+                        )
                         .await?;
                     texts.push(text);
                 }
@@ -283,6 +315,23 @@ impl Responder for PersonaResponder {
             turn_tier,
         })
     }
+}
+
+// ---------------------------------------------------------------------------
+// Persona contract v2 helpers
+// ---------------------------------------------------------------------------
+
+/// Resolve a persona's contract v2 `tools:` allowlist into the
+/// `Option<Arc<HashSet<String>>>` shape `InvokeCtx`/`TurnKernel::run_tool_loop`
+/// expect. `None` — either the persona wasn't found in the registry, or it
+/// declared no `tools:` at all (pre-contract-v2 / explicitly unrestricted) —
+/// stays unrestricted, never treated as "deny everything".
+fn resolve_allowed_tools(
+    persona: Option<&bastion_types::Persona>,
+) -> Option<Arc<HashSet<String>>> {
+    persona
+        .and_then(|p| p.tools.as_ref())
+        .map(|list| Arc::new(list.iter().cloned().collect::<HashSet<String>>()))
 }
 
 // ---------------------------------------------------------------------------
