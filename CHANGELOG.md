@@ -7,6 +7,43 @@ version).
 
 ## Unreleased
 
+### Added
+
+- Persona contract v2: SOUL.md front-matter (`bastion-personas::persona::soul::PersonaFront`)
+  gains `objectives`, `goals`, `tools` (capability allowlist), and `scope`,
+  all `#[serde(default)]` so pre-v2 SOUL.md files keep parsing unchanged.
+  `PersonaFront::validate()` reports every contract-completeness problem
+  (empty objectives/goals, missing scope, a suspicious `Some([])` tools
+  list) without turning a validation problem into a parse failure; the
+  registry loader now `tracing::warn!`s each problem per persona in
+  addition to its existing skip-with-warn behavior on real parse errors.
+- `bastion_types::Persona` carries the same four fields (plus a `Default`
+  impl so existing struct-literal construction sites only need
+  `..Default::default()`, not four new explicit fields).
+- Per-persona tool-authority enforcement gate (Policy 0):
+  `CapabilityRegistry::invoke` denies any capability name outside the
+  dispatching persona's resolved `tools:` allowlist BEFORE the egress/
+  approval policies run (`InvokeCtx::allowed_tools`, new
+  `capability::check_tool_allowed`, `BastionError::ToolNotAllowed`). The
+  empty-registry MCP-bypass path in `agent::loop_::AgentLoop::dispatch_tool_loop`
+  applies the identical check inline (no `Capability`/`InvokeCtx` of its
+  own to carry the gate through) — see `docs/SECURITY-INVARIANTS.md` §9.
+  `allowed_tools: None` (no `tools:` declared, or no persona resolved)
+  stays unrestricted: every existing persona and every non-persona-scoped
+  `InvokeCtx` construction site keeps working exactly as before.
+
+### Changed
+
+- **Breaking** (not caught by the mechanical `docs/api-baseline` check,
+  which tracks item presence/name, not signatures — see
+  `docs/VERSIONING.md` §2): `agent::ports::TurnKernel::run_tool_loop` gains
+  a new `allowed_tools: Option<Arc<HashSet<String>>>` parameter; every
+  call site and the sole implementer (`AgentLoop`) are updated in the same
+  change. `bastion-types`, `bastion-runtime`, and `bastion-personas`
+  advance to `0.2.0` for this and the `Persona`/`InvokeCtx` field additions
+  above (exhaustive external struct literals against either type need
+  `..Default::default()` now).
+
 ## 0.2.0 — 2026-07-20
 
 ### Added

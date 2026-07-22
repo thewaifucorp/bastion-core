@@ -14,6 +14,8 @@ use bastion_types::{
 use crate::capability::CapabilityRegistry;
 use crate::provider::{Provider, SharedProvider};
 use crate::types::{CallConfig, LlmResponse, Message};
+use std::collections::HashSet;
+use std::sync::Arc;
 
 /// Final authority for a requested effect. Managed products inject their
 /// server-side adapter; standalone products may compose a local authority.
@@ -425,7 +427,14 @@ pub trait TurnKernel: Send + Sync {
     /// Runs the capability-registry-gated tool loop to completion
     /// (`AgentLoop::dispatch_tool_loop`) for one persona's initial LLM
     /// response — pure kernel logic (capability_registry + egress + session +
-    /// tool_source), no persona/cabinet knowledge.
+    /// tool_source). `allowed_tools` is the ONE piece of persona-derived
+    /// authority this seam carries — the resolved contract-v2 `tools:`
+    /// allowlist for whichever persona is handling this turn (`None` for an
+    /// unrestricted/legacy persona) — never a persona/cabinet object itself;
+    /// the kernel still has no persona/cabinet knowledge beyond this single
+    /// resolved value, mirroring how `resolved_tier` already carries the
+    /// persona's privacy tier without exposing the `Persona` type.
+    #[allow(clippy::too_many_arguments)]
     async fn run_tool_loop(
         &mut self,
         history: &mut Vec<Message>,
@@ -434,6 +443,7 @@ pub trait TurnKernel: Send + Sync {
         initial_response: LlmResponse,
         owner: &str,
         resolved_tier: Option<PrivacyTier>,
+        allowed_tools: Option<Arc<HashSet<String>>>,
     ) -> anyhow::Result<String>;
 }
 

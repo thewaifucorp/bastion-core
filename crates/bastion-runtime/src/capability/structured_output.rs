@@ -76,6 +76,7 @@ mod tests {
         InvokeCtx {
             owner: "test-owner".into(),
             privacy_tier: None,
+            allowed_tools: None,
         }
     }
 

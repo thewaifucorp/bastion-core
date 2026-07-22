@@ -189,9 +189,15 @@ impl fmt::Display for FailureKind {
 /// Moved here from `src/memory/mod.rs` (M2 3b — vocabulary shared across the
 /// kernel/product boundary, not memory-store logic itself; see
 /// `docs/ARCHITECTURE.md` finding #2).
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+///
+/// Defaults to `LocalOnly` (persona contract v2): the strictest tier, so any
+/// caller that builds a `Persona`/`InvokeCtx`-adjacent value via
+/// `..Default::default()` and forgets to set this explicitly fails closed
+/// (never silently defaults to a permissive cloud-egress tier).
+#[derive(Debug, Clone, Copy, PartialEq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PrivacyTier {
+    #[default]
     LocalOnly,
     CloudOk,
 }
@@ -360,7 +366,16 @@ pub type PersonaId = String;
 
 /// A loaded persona ready for execution. This is pure shared data; persona
 /// registry and I/O behavior live in `bastion-personas`.
-#[derive(Debug, Clone, Serialize)]
+///
+/// Persona contract v2 added `objectives`/`goals`/`tools`/`scope` (parsed from
+/// SOUL.md front-matter by `bastion-personas::persona::soul::PersonaFront`).
+/// `#[derive(Default)]` exists SOLELY so the ~12 pre-v2 struct-literal
+/// construction sites across the workspace (tests + one embedding example)
+/// can append `..Default::default()` instead of every call site needing to
+/// spell out four new fields it has no opinion on — production code
+/// (`bastion-personas`'s registry loader) always sets all four explicitly
+/// from the parsed `PersonaFront`, never relies on this Default impl.
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct Persona {
     /// Canonical persona identifier (matches the directory name / SOUL.md `name` field).
     pub name: String,
@@ -374,6 +389,24 @@ pub struct Persona {
     pub weight: f32,
     /// Declared skill tags (from SOUL.md `skills:`).
     pub skills: Vec<String>,
+    /// Persona contract v2: declared objectives (SOUL.md `objectives:`) — free-form,
+    /// human-readable statements of what this persona is FOR. Not machine-enforced;
+    /// `PersonaFront::validate()` flags an empty list as a contract problem.
+    pub objectives: Vec<String>,
+    /// Persona contract v2: declared goals (SOUL.md `goals:`) — distinct from
+    /// `objectives` (broader "why") and from `bastion_types::Goal` (the persisted,
+    /// GOAL-01 tracked row); this is the SOUL.md-declared intent list.
+    pub goals: Vec<String>,
+    /// Persona contract v2: the capability allowlist (SOUL.md `tools:`).
+    /// `None` = unrestricted (back-compat with pre-contract-v2 SOUL.md files —
+    /// every existing persona keeps working exactly as before). `Some(list)` =
+    /// this persona may only invoke capabilities named in `list`; enforced by
+    /// `CapabilityRegistry::invoke`'s Policy 0 (`InvokeCtx.allowed_tools`) and
+    /// mirrored at the empty-registry MCP-bypass path in `agent/loop_.rs`.
+    pub tools: Option<Vec<String>>,
+    /// Persona contract v2: free-form declared operating scope (SOUL.md `scope:`).
+    /// Documentation/contract-clarity only — not machine-enforced (unlike `tools`).
+    pub scope: Option<String>,
 }
 
 /// Router mode for a turn: single/parallel persona dispatch or Cabinet.
@@ -609,6 +642,18 @@ pub enum BastionError {
     /// surface verbatim.
     #[error("Secret not found for reference '{name}'")]
     SecretNotFound { name: String },
+    /// Persona contract v2 (`tools:` allowlist) denial — the requested
+    /// capability is not in the dispatching persona's resolved
+    /// `allowed_tools` set. Deliberate symmetry with `PrivacyEgressBlocked`/
+    /// `ApprovalDenied`: callers `downcast_ref::<BastionError>()` to
+    /// recognize this as a structural, non-attacker-controlled denial (the
+    /// message is fixed and safe to hand back to the model, never raw
+    /// external content) — both `CapabilityRegistry::invoke`'s Policy 0 and
+    /// the empty-registry MCP-bypass path in
+    /// `agent/loop_.rs::dispatch_tool_loop` raise this SAME variant so
+    /// neither path's tagging/logging diverges.
+    #[error("Tool '{capability}' is not in this persona's allowed tool list")]
+    ToolNotAllowed { capability: String },
 }
 
 /// Strip `<think>...</think>` blocks from LLM output (CORE-09).

@@ -274,6 +274,7 @@ mod tests {
                 tier: *tier,
                 weight: 0.5,
                 skills: vec![],
+                ..Default::default()
             })
             .collect();
         let tiers: Vec<PrivacyTier> = personas.iter().map(|p| p.tier).collect();

@@ -24,4 +24,6 @@ pub use approval::{
 };
 pub use auth_resolver::NullAuthResolver;
 pub use permission_queue::{NullPermissionGate, SqlitePermissionGate};
-pub use registry::{Capability, CapabilityRegistry, InvokeCtx, TaggedValue, TurnCapabilityScope};
+pub use registry::{
+    check_tool_allowed, Capability, CapabilityRegistry, InvokeCtx, TaggedValue, TurnCapabilityScope,
+};

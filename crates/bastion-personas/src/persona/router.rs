@@ -90,6 +90,10 @@ pub async fn route(
             let ctx = crate::capability::InvokeCtx {
                 owner: owner.to_owned(),
                 privacy_tier: Some(crate::memory::PrivacyTier::LocalOnly),
+                // Ephemeral internal structured-output capability, not a
+                // persona-dispatched user tool call — no persona contract
+                // applies here, so unrestricted (None) is correct.
+                allowed_tools: None,
             };
             crate::provider::complete_structured_via_forced_tool_call(
                 provider,
@@ -411,6 +415,7 @@ mod tests {
                 tier: PrivacyTier::LocalOnly,
                 weight: 0.9,
                 skills: vec!["health".to_string()],
+                ..Default::default()
             },
         );
         personas.insert(
@@ -422,6 +427,7 @@ mod tests {
                 tier: PrivacyTier::CloudOk,
                 weight: 0.7,
                 skills: vec![],
+                ..Default::default()
             },
         );
         PersonaRegistry::new_from_map(personas)

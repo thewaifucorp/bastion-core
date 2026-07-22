@@ -4,13 +4,42 @@ use crate::memory::PrivacyTier;
 use async_trait::async_trait;
 use bastion_types::{ApprovalOutcome, BastionError};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// Invocation context — resolved BEFORE entering registry.invoke.
 pub struct InvokeCtx {
     pub owner: String,
     pub privacy_tier: Option<PrivacyTier>,
+    /// Persona contract v2 (`tools:` allowlist) — the resolved authority set
+    /// for the persona dispatching this call. `None` = unrestricted
+    /// (legacy/back-compat: every pre-contract-v2 persona, and every caller
+    /// that never resolves a persona at all). `Some(set)` restricts dispatch
+    /// to exactly the capability names in `set` — enforced by
+    /// `CapabilityRegistry::invoke`'s Policy 0, below.
+    pub allowed_tools: Option<Arc<HashSet<String>>>,
+}
+
+/// Persona contract v2 tool-authority check (Policy 0) — shared between
+/// `CapabilityRegistry::invoke` and the empty-registry MCP-bypass path in
+/// `agent/loop_.rs::dispatch_tool_loop` (the SAME historical blind spot the
+/// egress check needed a second call site for: `docs/SECURITY-INVARIANTS.md`
+/// §4 / this module's own `invoke()` doc). `allowed_tools == None` is the
+/// unrestricted/legacy case; `Some(set)` denies fail-closed for any name
+/// outside it, raising the SAME typed `BastionError::ToolNotAllowed` from
+/// both call sites so neither path's tagging/logging diverges.
+pub fn check_tool_allowed(
+    allowed_tools: &Option<Arc<HashSet<String>>>,
+    name: &str,
+) -> anyhow::Result<()> {
+    if let Some(allowed) = allowed_tools {
+        if !allowed.contains(name) {
+            anyhow::bail!(BastionError::ToolNotAllowed {
+                capability: name.to_owned(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// A capability is anything the agent can invoke through the registry.
@@ -240,6 +269,10 @@ impl CapabilityRegistry {
     /// Single policy enforcement point (D-13 non-negotiable guardrail).
     ///
     /// Policy order:
+    /// 0. Tool authority gate (persona contract v2) — fail-closed deny if
+    ///    `ctx.allowed_tools` is `Some(set)` and `name` is not in it. Checked
+    ///    BEFORE egress/approval — an out-of-contract tool call for a
+    ///    tools-restricted persona must never reach those policies at all.
     /// 1. Egress check — fail-closed on LocalOnly or None tier for non-local adapters
     /// 2. Approval gate (SEC-01) — if `cap.needs_approval()`, gate on the wired
     ///    `ApprovalGate` (queue/idempotent-resume/cache/typed-deny), or fail-closed
@@ -266,6 +299,11 @@ impl CapabilityRegistry {
             .inner
             .get(name)
             .ok_or_else(|| anyhow::anyhow!("unknown capability: {}", name))?;
+
+        // Policy 0: persona tool-authority gate (contract v2 `tools:` allowlist).
+        // Checked first — an out-of-contract tool call for a tools-restricted
+        // persona must never reach the egress/approval machinery below.
+        check_tool_allowed(&ctx.allowed_tools, name)?;
 
         // Policy 1: egress check.
         // Locality is a TYPED property of the adapter (`is_local()`), NEVER derived from
@@ -550,6 +588,7 @@ mod tests {
         InvokeCtx {
             owner: owner.to_string(),
             privacy_tier: Some(PrivacyTier::CloudOk),
+            allowed_tools: None,
         }
     }
 
@@ -742,6 +781,7 @@ mod tests {
                 &InvokeCtx {
                     owner: "alice".to_string(),
                     privacy_tier: Some(PrivacyTier::LocalOnly),
+                    allowed_tools: None,
                 },
             )
             .await
@@ -775,6 +815,7 @@ mod tests {
                 &InvokeCtx {
                     owner: "alice".to_string(),
                     privacy_tier: Some(PrivacyTier::CloudOk),
+                    allowed_tools: None,
                 },
             )
             .await
@@ -851,6 +892,7 @@ mod tests {
                     &InvokeCtx {
                         owner: "alice".to_string(),
                         privacy_tier: Some(PrivacyTier::CloudOk),
+                        allowed_tools: None,
                     },
                 )
                 .await;
@@ -889,6 +931,7 @@ mod tests {
                 &InvokeCtx {
                     owner: "alice".to_string(),
                     privacy_tier: Some(PrivacyTier::CloudOk),
+                    allowed_tools: None,
                 },
             )
             .await;
@@ -896,5 +939,103 @@ mod tests {
             result.is_ok(),
             "capability must be invocable again after quarantine scope drops"
         );
+    }
+
+    // --- Persona contract v2: Policy 0 tool-authority gate ---------------------
+
+    fn allowed_set(names: &[&str]) -> Option<Arc<HashSet<String>>> {
+        Some(Arc::new(names.iter().map(|s| s.to_string()).collect()))
+    }
+
+    #[tokio::test]
+    async fn invoke_denies_tool_not_in_allowed_set() {
+        let mut registry = CapabilityRegistry::new();
+        registry.register(stub("memory_search")).unwrap();
+
+        let result = registry
+            .invoke(
+                "memory_search",
+                serde_json::json!({}),
+                &InvokeCtx {
+                    owner: "alice".to_string(),
+                    privacy_tier: Some(PrivacyTier::CloudOk),
+                    allowed_tools: allowed_set(&["goal_create"]),
+                },
+            )
+            .await;
+
+        let err = result.expect_err(
+            "a tool outside the persona's allowed_tools set must be denied, never dispatched",
+        );
+        assert!(
+            matches!(
+                err.downcast_ref::<BastionError>(),
+                Some(BastionError::ToolNotAllowed { capability }) if capability == "memory_search"
+            ),
+            "expected Err(BastionError::ToolNotAllowed), got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn invoke_allows_any_tool_when_allowed_tools_is_none() {
+        let mut registry = CapabilityRegistry::new();
+        registry.register(stub("memory_search")).unwrap();
+
+        let result = registry
+            .invoke(
+                "memory_search",
+                serde_json::json!({}),
+                &InvokeCtx {
+                    owner: "alice".to_string(),
+                    privacy_tier: Some(PrivacyTier::CloudOk),
+                    allowed_tools: None,
+                },
+            )
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "allowed_tools: None must stay unrestricted (legacy/back-compat persona contract)"
+        );
+    }
+
+    #[tokio::test]
+    async fn invoke_allows_tool_present_in_allowed_set() {
+        let mut registry = CapabilityRegistry::new();
+        registry.register(stub("memory_search")).unwrap();
+
+        let result = registry
+            .invoke(
+                "memory_search",
+                serde_json::json!({}),
+                &InvokeCtx {
+                    owner: "alice".to_string(),
+                    privacy_tier: Some(PrivacyTier::CloudOk),
+                    allowed_tools: allowed_set(&["memory_search", "goal_create"]),
+                },
+            )
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "a tool explicitly present in allowed_tools must dispatch normally"
+        );
+    }
+
+    #[test]
+    fn check_tool_allowed_denies_outside_set() {
+        let allowed = allowed_set(&["a"]);
+        assert!(check_tool_allowed(&allowed, "b").is_err());
+    }
+
+    #[test]
+    fn check_tool_allowed_allows_none() {
+        assert!(check_tool_allowed(&None, "anything").is_ok());
+    }
+
+    #[test]
+    fn check_tool_allowed_allows_member_of_set() {
+        let allowed = allowed_set(&["a", "b"]);
+        assert!(check_tool_allowed(&allowed, "b").is_ok());
     }
 }

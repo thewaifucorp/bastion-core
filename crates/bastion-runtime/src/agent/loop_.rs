@@ -18,6 +18,7 @@ use crate::types::{
 use bastion_types::DeploymentContext;
 use opentelemetry::trace::{Span as _, SpanKind, Tracer as _};
 use opentelemetry::{global as otel_global, KeyValue};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -1221,6 +1222,12 @@ impl AgentLoop {
             let ctx = crate::capability::InvokeCtx {
                 owner: owner.to_owned(),
                 privacy_tier: Some(crate::memory::PrivacyTier::CloudOk),
+                // This capability already cleared Policy 0 (persona tool gate)
+                // once, at the original enqueue-time `invoke()` call — this
+                // resolution intercept has no persona context to re-resolve
+                // `allowed_tools` from (only `owner`), so `None` here is
+                // deliberate, not an oversight.
+                allowed_tools: None,
             };
             // Plan 11-07 (SEC-04): `invoke()` now returns `TaggedValue` instead of
             // a bare `Value` — this call site already discards the Ok payload
@@ -1527,6 +1534,14 @@ impl AgentLoop {
     /// - `response`: initial LlmResponse from the runner
     /// - `owner`: resolved owner for InvokeCtx
     /// - `resolved_tier`: privacy tier for egress gate in InvokeCtx
+    /// - `allowed_tools`: persona contract v2 tool-authority set (Policy 0),
+    ///   resolved by the caller (`PersonaResponder::dispatch_single_or_parallel`)
+    ///   from the dispatching persona's `tools:` field. `None` = unrestricted.
+    ///   Threaded into `InvokeCtx` for the normal registry path AND checked
+    ///   directly before the empty-registry MCP-bypass dispatch below — the
+    ///   bypass has no `Capability`/`InvokeCtx` of its own to carry the gate
+    ///   through, so it is enforced inline instead (same fail-closed contract).
+    #[allow(clippy::too_many_arguments)]
     async fn dispatch_tool_loop(
         &mut self,
         history: &mut Vec<Message>,
@@ -1535,6 +1550,7 @@ impl AgentLoop {
         initial_response: crate::types::LlmResponse,
         owner: &str,
         resolved_tier: Option<crate::memory::PrivacyTier>,
+        allowed_tools: Option<Arc<HashSet<String>>>,
     ) -> anyhow::Result<String> {
         // SEAM #4: tracer handle for child spans (chat, execute_tool)
         let tracer = otel_global::tracer("bastion");
@@ -1640,6 +1656,10 @@ impl AgentLoop {
                             privacy_tier: Some(
                                 resolved_tier.unwrap_or(crate::memory::PrivacyTier::LocalOnly),
                             ),
+                            // Persona contract v2 (Policy 0): the resolved allowlist for
+                            // whichever persona is dispatching this turn. `None` stays
+                            // unrestricted (legacy contract).
+                            allowed_tools: allowed_tools.clone(),
                         };
                         // SEAM #4: span filho execute_tool por tool call
                         let mut tool_span = tracer
@@ -1671,15 +1691,29 @@ impl AgentLoop {
                             // ungated. M3/F1: the gate now lives INSIDE `call_tool_with_timeout`
                             // (`ToolSource` port contract) — this call site only passes
                             // `resolved_tier` through, it no longer calls `check_egress` itself.
-                            let dispatch = self
-                                .tool_source
-                                .call_tool_with_timeout(
-                                    &tc.name,
-                                    tc.arguments.clone(),
-                                    owner,
-                                    resolved_tier,
-                                )
-                                .await;
+                            //
+                            // Persona contract v2 (Policy 0): this bypass path has no
+                            // `CapabilityRegistry::invoke` call to enforce the tool-authority
+                            // gate for it — `check_tool_allowed` is applied HERE, directly,
+                            // BEFORE dispatch, closing the exact blind spot the egress gate
+                            // above already had to close for the same reason (this path
+                            // predates both gates and skips the registry entirely).
+                            let dispatch = match crate::capability::check_tool_allowed(
+                                &allowed_tools,
+                                &tc.name,
+                            ) {
+                                Ok(()) => {
+                                    self.tool_source
+                                        .call_tool_with_timeout(
+                                            &tc.name,
+                                            tc.arguments.clone(),
+                                            owner,
+                                            resolved_tier,
+                                        )
+                                        .await
+                                }
+                                Err(e) => Err(e),
+                            };
                             if let Err(e) = &dispatch {
                                 // SEAM #4: record error type (CRITICAL: no content/payload — T-05-05-02)
                                 tool_span.set_attribute(KeyValue::new("error.type", e.to_string()));
@@ -2256,6 +2290,7 @@ impl TurnKernel for AgentLoop {
         self.session.append(session_id, msg, output_tokens).await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn run_tool_loop(
         &mut self,
         history: &mut Vec<Message>,
@@ -2264,6 +2299,7 @@ impl TurnKernel for AgentLoop {
         initial_response: crate::types::LlmResponse,
         owner: &str,
         resolved_tier: Option<crate::memory::PrivacyTier>,
+        allowed_tools: Option<Arc<HashSet<String>>>,
     ) -> anyhow::Result<String> {
         self.dispatch_tool_loop(
             history,
@@ -2272,6 +2308,7 @@ impl TurnKernel for AgentLoop {
             initial_response,
             owner,
             resolved_tier,
+            allowed_tools,
         )
         .await
     }
@@ -2713,7 +2750,9 @@ fn spawn_delegated_task_consumer(
 /// (`capability/registry.rs`) rather than a parallel/duplicated convention.
 ///
 /// Preserves the pre-existing (pre-M3) trust split for errors, now shared
-/// instead of copy-pasted at each call site: an egress denial is an
+/// instead of copy-pasted at each call site: an egress denial, or a persona
+/// contract v2 tool-authority denial (Policy 0, `BastionError::ToolNotAllowed`
+/// — same structural-denial shape as `PrivacyEgressBlocked`), is an
 /// internally-generated safe message (`trusted: true`, mirrors
 /// `CapabilityRegistry::invoke`'s own errors); any other dispatch error stays
 /// untrusted (fail-closed default — an external tool's error text may itself
@@ -2725,14 +2764,15 @@ fn tag_bypass_result(
     match outcome {
         Ok(value) => crate::capability::TaggedValue::untrusted(source, value),
         Err(e) => {
-            let egress_blocked = matches!(
+            let structural_denial = matches!(
                 e.downcast_ref::<BastionError>(),
                 Some(BastionError::PrivacyEgressBlocked)
+                    | Some(BastionError::ToolNotAllowed { .. })
             );
             crate::capability::TaggedValue {
                 data: serde_json::json!({"error": e.to_string()}),
                 source: source.to_owned(),
-                trusted: egress_blocked,
+                trusted: structural_denial,
             }
         }
     }

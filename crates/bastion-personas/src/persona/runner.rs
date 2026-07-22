@@ -285,6 +285,7 @@ mod tests {
                     tier: PrivacyTier::CloudOk,
                     weight: 0.5,
                     skills: vec![],
+                    ..Default::default()
                 },
             );
         }
@@ -453,6 +454,7 @@ mod tests {
                     tier: PrivacyTier::LocalOnly,
                     weight: 0.5,
                     skills: vec![],
+                    ..Default::default()
                 },
             );
         }

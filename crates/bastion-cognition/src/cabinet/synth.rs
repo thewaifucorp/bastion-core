@@ -89,6 +89,9 @@ pub async fn synthesize_in_language(
             let ctx = crate::capability::InvokeCtx {
                 owner: "cabinet_synthesis".to_owned(),
                 privacy_tier: Some(crate::memory::PrivacyTier::LocalOnly),
+                // Ephemeral internal structured-output capability — no
+                // persona contract applies, unrestricted (None) is correct.
+                allowed_tools: None,
             };
             crate::provider::complete_structured_via_forced_tool_call(
                 provider,

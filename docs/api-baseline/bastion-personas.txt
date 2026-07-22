@@ -34,3 +34,4 @@ fn persona/runner.rs:run
 struct persona/soul.rs:BastionBlock
 struct persona/soul.rs:PersonaFront
 fn persona/soul.rs:parse_soul
+fn persona/soul.rs:validate

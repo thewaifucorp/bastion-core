@@ -199,6 +199,7 @@ mod tests {
                 tier: crate::memory::PrivacyTier::CloudOk,
                 weight: 1.0,
                 skills: vec![],
+                ..Default::default()
             },
         );
         let registry = PersonaRegistry::new_from_map(p_map);
