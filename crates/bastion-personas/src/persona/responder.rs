@@ -86,9 +86,8 @@ impl PersonaResponder {
                 // `self.registry.get(&pid)` lookup already used above. `None`
                 // (no `tools:` declared, or persona not found) stays
                 // unrestricted — the legacy/back-compat contract.
-                let allowed_tools: Option<Arc<HashSet<String>>> = resolve_allowed_tools(
-                    self.registry.get(&pid),
-                );
+                let allowed_tools: Option<Arc<HashSet<String>>> =
+                    resolve_allowed_tools(self.registry.get(&pid));
                 let text = kernel
                     .run_tool_loop(
                         history,
@@ -125,9 +124,8 @@ impl PersonaResponder {
                     // Persona contract v2 (Policy 0): same per-persona resolution
                     // as the Single-dispatch branch above — each parallel
                     // persona may carry a different `tools:` allowlist.
-                    let allowed_tools: Option<Arc<HashSet<String>>> = resolve_allowed_tools(
-                        self.registry.get(&pid),
-                    );
+                    let allowed_tools: Option<Arc<HashSet<String>>> =
+                        resolve_allowed_tools(self.registry.get(&pid));
                     let text = kernel
                         .run_tool_loop(
                             history,
@@ -326,9 +324,7 @@ impl Responder for PersonaResponder {
 /// expect. `None` — either the persona wasn't found in the registry, or it
 /// declared no `tools:` at all (pre-contract-v2 / explicitly unrestricted) —
 /// stays unrestricted, never treated as "deny everything".
-fn resolve_allowed_tools(
-    persona: Option<&bastion_types::Persona>,
-) -> Option<Arc<HashSet<String>>> {
+fn resolve_allowed_tools(persona: Option<&bastion_types::Persona>) -> Option<Arc<HashSet<String>>> {
     persona
         .and_then(|p| p.tools.as_ref())
         .map(|list| Arc::new(list.iter().cloned().collect::<HashSet<String>>()))

@@ -70,9 +70,8 @@ impl PersonaFront {
             );
         }
         if self.goals.is_empty() {
-            problems.push(
-                "persona contract v2: `goals` is empty — declare at least one".to_string(),
-            );
+            problems
+                .push("persona contract v2: `goals` is empty — declare at least one".to_string());
         }
         let scope_missing = match &self.scope {
             None => true,
@@ -227,7 +226,10 @@ You are Guardian.
         let (front, _body) = parse_soul(V1_LEGACY_SOUL).expect("legacy SOUL must still parse");
         assert!(front.objectives.is_empty());
         assert!(front.goals.is_empty());
-        assert!(front.tools.is_none(), "absent `tools:` must default to None (unrestricted)");
+        assert!(
+            front.tools.is_none(),
+            "absent `tools:` must default to None (unrestricted)"
+        );
         assert!(front.scope.is_none());
     }
 
@@ -235,7 +237,10 @@ You are Guardian.
     fn parse_v2_full_soul_populates_all_contract_fields() {
         let (front, body) = parse_soul(V2_FULL_SOUL).expect("v2 SOUL must parse");
         assert_eq!(front.name, "Guardian");
-        assert_eq!(front.objectives, vec!["Keep the household's finances honest"]);
+        assert_eq!(
+            front.objectives,
+            vec!["Keep the household's finances honest"]
+        );
         assert_eq!(front.goals, vec!["Never let a bill go unpaid"]);
         assert_eq!(
             front.tools,
@@ -260,7 +265,9 @@ You are Guardian.
         // `validate()` should surface every missing contract-v2 field —
         // this is the loud path, never a parse failure.
         let (front, _) = parse_soul(V1_LEGACY_SOUL).expect("parse failed");
-        let problems = front.validate().expect_err("legacy SOUL should fail validate()");
+        let problems = front
+            .validate()
+            .expect_err("legacy SOUL should fail validate()");
         assert!(problems.iter().any(|p| p.contains("objectives")));
         assert!(problems.iter().any(|p| p.contains("goals")));
         assert!(problems.iter().any(|p| p.contains("scope")));
@@ -286,7 +293,9 @@ Body.
 "#;
         let (front, _) = parse_soul(soul).expect("parse failed");
         assert_eq!(front.tools, Some(vec![]));
-        let problems = front.validate().expect_err("Some([]) tools must be flagged");
+        let problems = front
+            .validate()
+            .expect_err("Some([]) tools must be flagged");
         assert!(problems.iter().any(|p| p.contains("tools")));
     }
 

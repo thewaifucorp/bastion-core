@@ -2766,7 +2766,8 @@ fn tag_bypass_result(
         Err(e) => {
             let structural_denial = matches!(
                 e.downcast_ref::<BastionError>(),
-                Some(BastionError::PrivacyEgressBlocked) | Some(BastionError::ToolNotAllowed { .. })
+                Some(BastionError::PrivacyEgressBlocked)
+                    | Some(BastionError::ToolNotAllowed { .. })
             );
             crate::capability::TaggedValue {
                 data: serde_json::json!({"error": e.to_string()}),
