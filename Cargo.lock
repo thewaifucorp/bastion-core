@@ -377,7 +377,7 @@ dependencies = [
 
 [[package]]
 name = "bastion-personas"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -413,7 +413,7 @@ dependencies = [
 
 [[package]]
 name = "bastion-runtime"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -433,7 +433,7 @@ dependencies = [
 
 [[package]]
 name = "bastion-types"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "schemars 0.8.22",

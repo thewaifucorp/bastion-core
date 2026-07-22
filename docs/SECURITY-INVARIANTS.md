@@ -65,6 +65,13 @@ Core persists agent sessions, approvals, and governed memory. It does not provid
 
 The host may inject a neutral reference or summary as context, but commits domain changes in its own system of record.
 
+## 9. Persona tool authority is enforced, not advisory
+
+Persona contract v2's `tools:` field (`bastion-personas`'s `PersonaFront`/`Persona`) is an allowlist, not documentation. `CapabilityRegistry::invoke`'s Policy 0 denies any capability name outside the dispatching persona's resolved `allowed_tools` set BEFORE the egress/approval policies run. The empty-registry MCP-bypass path in `dispatch_tool_loop` (which has no `Capability`/`InvokeCtx` of its own) applies the identical `check_tool_allowed` gate directly, inline, before dispatch — the same historical blind spot invariant #2's egress check needed a second call site for. `allowed_tools: None` (absent `tools:`, or no persona resolved) stays unrestricted — this is the back-compat default for every pre-contract-v2 SOUL.md, never a silent deny-all.
+
+- **Code:** `crates/bastion-runtime/src/capability/registry.rs` (`InvokeCtx::allowed_tools`, `check_tool_allowed`, Policy 0), `crates/bastion-runtime/src/agent/loop_.rs` (`dispatch_tool_loop`'s registry path and empty-registry bypass), `crates/bastion-personas/src/persona/responder.rs` (`resolve_allowed_tools`), `crates/bastion-personas/src/persona/soul.rs` (`PersonaFront::tools`, `validate()`).
+- **Evidence:** `invoke_denies_tool_not_in_allowed_set`, `invoke_allows_any_tool_when_allowed_tools_is_none`, `invoke_allows_tool_present_in_allowed_set`, and the `check_tool_allowed_*` unit tests in `registry.rs`.
+
 ## Scope of this document
 
 Channel authentication, HTTP authorization, daemon serialization, Docker isolation, and sender-to-owner mapping belong to the embedding product. The `bastion-agent` security documentation is authoritative for those product-level guarantees.
