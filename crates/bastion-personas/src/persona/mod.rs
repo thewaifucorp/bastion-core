@@ -88,6 +88,18 @@ impl PersonaRegistry {
                 }
             };
 
+            // Persona contract v2: `validate()` never turns into a load failure
+            // here (the loader's contract stays skip-with-warn on PARSE errors
+            // only) — but every completeness problem it finds is logged so an
+            // operator can see WHY a persona is incomplete, not just that it
+            // loaded. An agent-side "propose a persona" apply path is expected
+            // to call `validate()` itself and fail loud instead.
+            if let Err(problems) = front.validate() {
+                for problem in &problems {
+                    tracing::warn!(path = %soul_path.display(), name = %front.name, "{problem}");
+                }
+            }
+
             let persona = Persona {
                 name: front.name.clone(),
                 description: front.description,
@@ -95,6 +107,10 @@ impl PersonaRegistry {
                 tier: front.bastion.privacy_tier,
                 weight: front.bastion.weight,
                 skills: front.skills,
+                objectives: front.objectives,
+                goals: front.goals,
+                tools: front.tools,
+                scope: front.scope,
             };
 
             tracing::debug!(name = %persona.name, tier = ?persona.tier, "loaded persona");
@@ -150,6 +166,7 @@ mod tests {
                 tier: PrivacyTier::LocalOnly,
                 weight: 0.9,
                 skills: vec!["health".to_string()],
+                ..Default::default()
             },
         );
         personas.insert(
@@ -161,6 +178,7 @@ mod tests {
                 tier: PrivacyTier::CloudOk,
                 weight: 0.7,
                 skills: vec![],
+                ..Default::default()
             },
         );
         PersonaRegistry { personas }
