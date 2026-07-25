@@ -259,6 +259,7 @@ impl Responder for PersonaResponder {
                     provider.clone(),
                     crate::cabinet::orchestrator::DEFAULT_ROUNDS,
                     kernel.capability_registry(),
+                    user_input,
                 )
                 .await?;
                 // CR-02: fail-closed egress on synthesis — the transcript may contain LocalOnly

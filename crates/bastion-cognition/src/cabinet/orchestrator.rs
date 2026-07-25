@@ -32,11 +32,18 @@ pub const MAX_ROUNDS: u8 = 3;
 /// - `provider`: Shared provider (Arc<RwLock>) — cloned into each JoinSet task.
 /// - `rounds`: Requested round count; clamped to `[1, MAX_ROUNDS]`.
 /// - `capability_registry`: Used to snapshot tool definitions for each persona's CallConfig (BIG-1).
+/// - `user_input`: the operator's actual message that convened this Cabinet round —
+///   found missing 2026-07-25 (real bug, not a hypothesis): every persona's turn
+///   prompt promised "the matter below" (`build_turn_prompt`) but nothing ever
+///   followed, because this parameter didn't exist. Every persona genuinely never
+///   saw the question they were meant to deliberate on, in every past Cabinet
+///   round ever run — not just this pack's own smoke test.
 pub async fn deliberate(
     table: &CabinetTable,
     provider: SharedProvider,
     rounds: u8,
     capability_registry: &crate::capability::CapabilityRegistry,
+    user_input: &str,
 ) -> anyhow::Result<Vec<Turn>> {
     let rounds = rounds.clamp(1, MAX_ROUNDS);
     let mut transcript: Vec<Turn> = Vec::new();
@@ -70,6 +77,7 @@ pub async fn deliberate(
             let snap = transcript_snapshot.clone();
             let round_kind = kind.clone();
             let tools = tool_defs.clone();
+            let user_input_owned = user_input.to_owned();
 
             set.spawn(async move {
                 // Fail-closed egress backstop (CF-1): before every cabinet provider call.
@@ -82,7 +90,13 @@ pub async fn deliberate(
                 }
 
                 // Build the turn prompt.
-                let prompt = build_turn_prompt(&persona_id, &system_prompt, &snap, round_kind);
+                let prompt = build_turn_prompt(
+                    &persona_id,
+                    &system_prompt,
+                    &snap,
+                    round_kind,
+                    &user_input_owned,
+                );
 
                 // Build CallConfig with persona's system prompt and tool definitions.
                 let config = CallConfig {
@@ -163,15 +177,22 @@ pub async fn deliberate(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/// `user_input` is the operator's actual message — MUST appear verbatim in
+/// both branches below. Bug found 2026-07-25: this function used to promise
+/// "the matter below" and then never include any matter at all, so every
+/// persona's turn (position AND reply) reasoned about nothing but its own
+/// system prompt (and, for replies, a transcript of other personas ALSO
+/// reasoning about nothing) — never the actual question being deliberated.
 fn build_turn_prompt(
     persona_id: &str,
     system_prompt: &str,
     transcript: &[Turn],
     kind: TurnKind,
+    user_input: &str,
 ) -> String {
     let header = if kind == TurnKind::Position {
         format!(
-            "You are {persona_id}. Provide your position on the matter below.\n\n{system_prompt}"
+            "You are {persona_id}. Provide your position on the matter below.\n\nMatter: {user_input}\n\n{system_prompt}"
         )
     } else {
         let prior = transcript
@@ -180,7 +201,7 @@ fn build_turn_prompt(
             .collect::<Vec<_>>()
             .join("\n");
         format!(
-            "You are {persona_id}. Review the positions below and provide your reply.\n\n{system_prompt}\n\nTranscript so far:\n{prior}"
+            "You are {persona_id}. Review the positions below and provide your reply.\n\nMatter: {user_input}\n\n{system_prompt}\n\nTranscript so far:\n{prior}"
         )
     };
     header
@@ -292,7 +313,7 @@ mod tests {
         let provider = make_provider();
 
         // Request 99 rounds — must be clamped to MAX_ROUNDS=3
-        let transcript = deliberate(&table, provider, 99, &make_registry())
+        let transcript = deliberate(&table, provider, 99, &make_registry(), "test matter")
             .await
             .unwrap();
 
@@ -318,7 +339,7 @@ mod tests {
         let provider = make_provider();
 
         // 1 round = only position turns (easier to check attribution)
-        let transcript = deliberate(&table, provider, 1, &make_registry())
+        let transcript = deliberate(&table, provider, 1, &make_registry(), "test matter")
             .await
             .unwrap();
 
@@ -346,7 +367,7 @@ mod tests {
         ]);
         let provider = make_provider();
 
-        let transcript = deliberate(&table, provider, 1, &make_registry())
+        let transcript = deliberate(&table, provider, 1, &make_registry(), "test matter")
             .await
             .unwrap();
         for turn in &transcript {
@@ -362,7 +383,7 @@ mod tests {
         ]);
         let provider = make_provider();
 
-        let transcript = deliberate(&table, provider, 2, &make_registry())
+        let transcript = deliberate(&table, provider, 2, &make_registry(), "test matter")
             .await
             .unwrap();
 
@@ -391,7 +412,7 @@ mod tests {
         let provider = make_provider(); // name() == "mock"
 
         // All turns should be skipped (egress blocked) — empty transcript.
-        let transcript = deliberate(&table, provider, 1, &make_registry())
+        let transcript = deliberate(&table, provider, 1, &make_registry(), "test matter")
             .await
             .unwrap();
         assert!(
@@ -399,5 +420,89 @@ mod tests {
             "expected empty transcript when egress blocks all calls, got {} turns",
             transcript.len()
         );
+    }
+
+    /// Regression test for the 2026-07-25 bug: `user_input` must actually
+    /// reach the message sent to the provider, in BOTH Position (R1) and
+    /// Reply (R2+) turns — not just live somewhere in the function signature
+    /// unused. Captures the real `history` argument (not `config.system_prompt`,
+    /// which every other test in this file inspects instead) — the User
+    /// message is where `build_turn_prompt`'s output actually lands.
+    struct CapturingProvider {
+        captured: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl Provider for CapturingProvider {
+        async fn complete(
+            &self,
+            history: &[Message],
+            _config: &CallConfig,
+        ) -> anyhow::Result<LlmResponse> {
+            if let Some(Message {
+                content: MessageContent::Text(text),
+                ..
+            }) = history.first()
+            {
+                self.captured.lock().unwrap().push(text.clone());
+            }
+            Ok(LlmResponse {
+                text: "ok".to_string(),
+                tool_calls: None,
+                usage: TokenUsage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    cache_read: 0,
+                    cache_write: 0,
+                    ..Default::default()
+                },
+            })
+        }
+        async fn complete_simple(&self, _prompt: &str) -> anyhow::Result<String> {
+            Ok("ok".to_string())
+        }
+        fn context_limit(&self) -> usize {
+            8192
+        }
+        fn model_name(&self) -> &str {
+            "capturing"
+        }
+        fn name(&self) -> &'static str {
+            "mock"
+        }
+    }
+
+    #[tokio::test]
+    async fn user_input_reaches_both_position_and_reply_turn_prompts() {
+        let table = make_table(&[
+            ("Alpha", PrivacyTier::CloudOk),
+            ("Beta", PrivacyTier::CloudOk),
+        ]);
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let provider: SharedProvider = Arc::new(RwLock::new(Box::new(CapturingProvider {
+            captured: captured.clone(),
+        }) as Box<dyn Provider>));
+
+        // 2 rounds: round 1 = Position turns, round 2 = Reply turns — both
+        // must carry the real question, not just the transcript-so-far.
+        deliberate(
+            &table,
+            provider,
+            2,
+            &make_registry(),
+            "Devo comprar AAPL agora?",
+        )
+        .await
+        .unwrap();
+
+        let prompts = captured.lock().unwrap();
+        assert_eq!(prompts.len(), 4, "2 personas x 2 rounds = 4 provider calls");
+        for prompt in prompts.iter() {
+            assert!(
+                prompt.contains("Devo comprar AAPL agora?"),
+                "every turn's prompt (Position AND Reply) must contain the \
+                 real user question, got: {prompt}"
+            );
+        }
     }
 }
