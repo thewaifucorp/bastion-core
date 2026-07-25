@@ -22,6 +22,17 @@ use crate::types::{CallConfig, Message, MessageContent, PersonaId, Role};
 pub const DEFAULT_ROUNDS: u8 = 2;
 pub const MAX_ROUNDS: u8 = 3;
 
+/// Stagger between spawning each persona's provider call within a round —
+/// found necessary 2026-07-25 real-LLM testing: N personas fanning out via
+/// JoinSet fire their provider calls at effectively the same instant, which
+/// free-tier providers (confirmed: Gemini's free tier) burst-rate-limit
+/// even when the same N calls spread over a minute would fit comfortably
+/// within quota. A few hundred ms of stagger costs little against typical
+/// LLM latency (seconds) and meaningfully reduces spurious 429s for anyone
+/// on a free/low tier — paid tiers with generous per-second limits pay this
+/// same small, fixed cost regardless of tier.
+const PERSONA_SPAWN_STAGGER: std::time::Duration = std::time::Duration::from_millis(400);
+
 /// Run the bounded Cabinet deliberation, returning the full tagged transcript.
 ///
 /// Synthesis (CAB-05) is NOT performed here — callers should pass the returned
@@ -70,7 +81,7 @@ pub async fn deliberate(
         // Fan-out: spawn one task per persona.
         let mut set: JoinSet<(PersonaId, anyhow::Result<String>)> = JoinSet::new();
 
-        for persona in &table.personas {
+        for (index, persona) in table.personas.iter().enumerate() {
             let persona_id = persona.name.clone();
             let system_prompt = persona.system_prompt.clone();
             let provider_clone = provider.clone();
@@ -78,8 +89,16 @@ pub async fn deliberate(
             let round_kind = kind.clone();
             let tools = tool_defs.clone();
             let user_input_owned = user_input.to_owned();
+            let stagger = PERSONA_SPAWN_STAGGER * index as u32;
 
             set.spawn(async move {
+                // See PERSONA_SPAWN_STAGGER's doc comment — spreads the burst
+                // of outbound provider calls out over a fraction of a second
+                // instead of firing all of them in the same instant.
+                if !stagger.is_zero() {
+                    tokio::time::sleep(stagger).await;
+                }
+
                 // Fail-closed egress backstop (CF-1): before every cabinet provider call.
                 let provider_name = {
                     let guard = provider_clone.read().await;
