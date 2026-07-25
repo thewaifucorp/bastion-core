@@ -89,3 +89,50 @@ crates are expected to stay 0.x well past the kernel's 1.0 (they are where
 new, less-settled surface continues to land); each is free to make its own
 1.0 call independently once its own contract has proven stable in
 practice.
+
+## 6. 2026-07-25 fabric-readiness pass (pre-1.0 checklist, not a freeze)
+
+Before `bastion-runtime` (Kernel tier) can responsibly cross 1.0, every
+`TODO(core seam)`/`TODO(A4 seam)` left in `bastion-agent` (the only external
+consumer today) needed an explicit decision: implemented now, or
+consciously deferred with a reason recorded. This pass audited all 5 and is
+the record of that decision — it does **not** itself declare 1.0; that
+remains a separate maintainer call once the kernel's contract has proven
+stable in practice (§5).
+
+**Implemented** (both touch `AgentLoop`, `bastion-runtime` — genuinely
+Kernel-tier, so both are additive `pub` surface, reflected in the
+regenerated `docs/api-baseline/bastion-runtime.txt`):
+
+- `AgentLoop::fallback_models` changed from a plain `Vec<String>` to
+  `SharedFallbackModels` (`Arc<RwLock<Vec<String>>>`) — the same shape as
+  `provider: SharedProvider` — so a caller holding a cloned handle can
+  hot-swap the fallback ladder on a running loop without `&mut AgentLoop`
+  or a restart (`bastion-agent/src/proposals.rs`'s `TODO(A4 seam)`).
+- `AgentLoop::compaction_provider: Option<SharedProvider>` (new field, opt
+  in via `with_compaction_provider`) — lets a caller point
+  `AutoCompact::compact`'s summarization call at a different provider than
+  the turn's conversational one. `None` (the default) is byte-identical to
+  pre-seam behavior (`bastion-agent/src/routing.rs`'s `TODO(core seam)` for
+  a dedicated compaction provider).
+
+**Consciously deferred** (all three touch Extension-tier crates —
+`bastion-agent-runtime`/`bastion-personas` — not `bastion-runtime`, so none
+of them gate a Kernel 1.0 tag; each crate is free to take these up on its
+own 0.x schedule):
+
+- Model hint on `SessionSpec`/`TaskInput` for `pursue_task` routing
+  (`bastion-agent/src/routing.rs`, `bastion-agent-runtime` crate).
+- Per-mode provider override on the Cabinet orchestrator
+  (`bastion-agent/src/routing.rs`, `bastion-personas` crate).
+- Routing provider construction through the daemon's `SecretResolver` so
+  secrets-dir-only keys work in `/proposal approve`'s `model_config`
+  handler (`bastion-agent/src/proposals.rs`) — this one isn't a kernel seam
+  at all, just a `bastion-agent`-side wiring gap; recorded here only
+  because it shared a `TODO(A4 seam)` tag with the two above.
+
+`docs/api-baseline/bastion-runtime.txt` was regenerated (`bash
+scripts/dump-public-api.sh`) and reviewed against this list before the
+change landed; `public-api-baseline` CI passed on the additive diff (new
+`SharedFallbackModels` type, new `with_compaction_provider` fn — no
+removal, no rename, no visibility change).

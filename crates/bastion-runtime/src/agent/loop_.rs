@@ -63,8 +63,23 @@ impl PendingItem {
     }
 }
 
+/// Fabric-ready seam: same shape as [`SharedProvider`], for the same reason —
+/// a cloned handle lets a caller outside `AgentLoop` hot-swap the fallback
+/// ladder on a running loop (see [`AgentLoop::fallback_models`]).
+pub type SharedFallbackModels = Arc<tokio::sync::RwLock<Vec<String>>>;
+
 pub struct AgentLoop {
     pub provider: SharedProvider,
+    /// Fabric-ready seam (`bastion-agent/src/routing.rs`'s `TODO(core seam)`):
+    /// optional dedicated provider for `AutoCompact::compact`'s summarization
+    /// call, distinct from the turn's conversational `provider` above (e.g. a
+    /// cheaper/faster model — summarization has different cost/latency/
+    /// quality needs than conversation). `None` (the default, set via
+    /// `AgentLoop::new`, never a constructor parameter — same "set post-
+    /// construction" discipline as `backend_profile`/`permission_gate` below)
+    /// preserves today's exact behavior: compaction uses the live `provider`.
+    /// Opt in via [`AgentLoop::with_compaction_provider`].
+    pub compaction_provider: Option<SharedProvider>,
     pub session: SessionManager,
     /// P3 `ToolSource` port — replaces the concrete `Arc<McpClient>` field.
     /// Sources tool defs for `run_provider_fallback` and dispatches the
@@ -117,7 +132,15 @@ pub struct AgentLoop {
     /// in order, when the primary provider suffers a hard/persistent failure
     /// (`complete_with_fallback_ladder`'s rung 3). Sourced from `AgentConfig.fallback_models`
     /// via main.rs. Empty = zero behavior change (today's exact fail-on-exhaustion behavior).
-    pub fallback_models: Vec<String>,
+    ///
+    /// Fabric-ready seam (`bastion-agent/src/proposals.rs`'s `TODO(A4 seam)`):
+    /// `Arc<RwLock<..>>`, the SAME shape as `provider: SharedProvider` above, so a
+    /// caller holding a clone of this field (this field is `pub`, same as
+    /// `provider`) can hot-swap the ladder on a running loop without a `&mut
+    /// AgentLoop` — the constructor still takes a plain `Vec<String>` and wraps
+    /// it, keeping `AgentLoop::new`'s signature untouched (same discipline as
+    /// `backend_profile`/`runtime_registry` below).
+    pub fallback_models: SharedFallbackModels,
     /// M2 (P2 `FailureSink` port): where the loop reports the EVAL-01
     /// egress-reject production-failure signal (`run_provider_fallback`'s
     /// `PrivacyEgressBlocked` arm). Injected at construction — the kernel no
@@ -244,6 +267,7 @@ impl AgentLoop {
         let (pending_tx, pending_rx) = mpsc::channel(32);
         Self {
             provider,
+            compaction_provider: None,
             session,
             tool_source,
             compactor: AutoCompact::new(),
@@ -266,7 +290,7 @@ impl AgentLoop {
             pending_rx: Some(pending_rx),
             forced_persona: None,
             forced_cabinet: None,
-            fallback_models,
+            fallback_models: Arc::new(tokio::sync::RwLock::new(fallback_models)),
             failure_sink,
             provider_resolver,
             pre_compaction_flush,
@@ -303,6 +327,15 @@ impl AgentLoop {
     /// calls this only when `[backend]` is actually configured.
     pub fn with_backend_profile(mut self, profile: BackendProfile) -> Self {
         self.backend_profile = profile;
+        self
+    }
+
+    /// Fabric-ready seam: opt into a dedicated provider for
+    /// `AutoCompact::compact`'s summarization call, distinct from the turn's
+    /// conversational `provider`. Without this call, compaction uses the
+    /// live `provider`, byte-identical to pre-seam behavior.
+    pub fn with_compaction_provider(mut self, provider: SharedProvider) -> Self {
+        self.compaction_provider = Some(provider);
         self
     }
 
@@ -1388,12 +1421,28 @@ impl AgentLoop {
                 }
             }
 
-            let provider_ref = self.provider.read().await;
-            history = self
-                .compactor
-                .compact(&session_id, &history, &**provider_ref, &self.session)
-                .await?;
-            drop(provider_ref);
+            // Fabric-ready seam (`bastion-agent/src/routing.rs`'s
+            // `TODO(core seam)`): a dedicated provider for compaction, e.g. a
+            // cheaper/faster model than the turn's live provider, since
+            // summarization has different quality/latency/cost needs than
+            // conversation. `AutoCompact::compact` already takes `&dyn
+            // Provider` as a plain parameter (no `self`-stored provider to
+            // change) — the seam is entirely in which handle this call site
+            // reads from. `None` (the default) preserves today's exact
+            // behavior byte-for-byte: the turn's own live provider.
+            if let Some(compaction_provider) = &self.compaction_provider {
+                let provider_ref = compaction_provider.read().await;
+                history = self
+                    .compactor
+                    .compact(&session_id, &history, &**provider_ref, &self.session)
+                    .await?;
+            } else {
+                let provider_ref = self.provider.read().await;
+                history = self
+                    .compactor
+                    .compact(&session_id, &history, &**provider_ref, &self.session)
+                    .await?;
+            }
         }
 
         // Ciclo 2.4 (`docs/SUPPORT-MATRIX.md` §3, mode 2):
@@ -1465,6 +1514,7 @@ impl AgentLoop {
                         user_input,
                         turn_tier,
                         outcome.attribution.first().map(|s| s.as_str()),
+                        outcome.allowed_tools.clone(),
                     )
                     .await
                 {
@@ -1983,6 +2033,8 @@ impl AgentLoop {
         let current_model = self.provider.read().await.model_name().to_owned();
         let candidate = self
             .fallback_models
+            .read()
+            .await
             .iter()
             .find(|m| m.as_str() != current_model.as_str())
             .cloned();
@@ -2023,6 +2075,7 @@ impl AgentLoop {
     /// `session_id` is the per-owner session resolved by the caller (run_turn_for).
     /// `owner` and `user_input` are passed so build_system_prompt can apply the per-block
     /// egress check (SEAM #2 / T-05-03-03: prevents LocalOnly beliefs leaking on fallback path).
+    #[allow(clippy::too_many_arguments)]
     async fn run_provider_fallback(
         &mut self,
         history: &mut Vec<Message>,
@@ -2031,6 +2084,7 @@ impl AgentLoop {
         user_input: &str,
         turn_tier: Option<crate::memory::PrivacyTier>,
         turn_persona: Option<&str>,
+        allowed_tools: Option<Arc<HashSet<String>>>,
     ) -> anyhow::Result<String> {
         // Build tool definitions via the ToolSource port (P3).
         // D-12/D-14b: list_tool_names() returns sorted-by-name output since Plan 08-02's
@@ -2162,15 +2216,31 @@ impl AgentLoop {
                         // `dispatch_tool_loop`'s bypass path applies, shared rather than
                         // duplicated, closing this path's trust-tagging gap (it previously
                         // handed the model completely untagged JSON, trusted or not).
-                        let dispatch = self
-                            .tool_source
-                            .call_tool_with_timeout(
-                                &tc.name,
-                                tc.arguments.clone(),
-                                owner,
-                                resolved_tier,
-                            )
-                            .await;
+                        //
+                        // Persona contract v2 (Policy 0): this bypass path had no
+                        // `CapabilityRegistry::invoke` call to enforce the tool-authority gate
+                        // either — `check_tool_allowed` is applied HERE, directly, BEFORE
+                        // dispatch, the exact same fix `dispatch_tool_loop`'s own bypass branch
+                        // already got. `allowed_tools` comes from `RespondOutcome` (resolved by
+                        // the `Responder` from the persona attributed to this turn, if any) —
+                        // this path runs when `route_text` was empty, which can still mean a
+                        // real persona handled (and is attributed to) the turn.
+                        let dispatch = match crate::capability::check_tool_allowed(
+                            &allowed_tools,
+                            &tc.name,
+                        ) {
+                            Ok(()) => {
+                                self.tool_source
+                                    .call_tool_with_timeout(
+                                        &tc.name,
+                                        tc.arguments.clone(),
+                                        owner,
+                                        resolved_tier,
+                                    )
+                                    .await
+                            }
+                            Err(e) => Err(e),
+                        };
                         let tagged = tag_bypass_result(&tc.name, dispatch);
 
                         // D-06: handle skill_reloaded signal from skill-writer container
@@ -3070,6 +3140,7 @@ mod tests {
                 text: response.text,
                 attribution: vec![],
                 turn_tier: None,
+                allowed_tools: None,
             })
         }
     }
@@ -3346,7 +3417,7 @@ mod tests {
 
     #[tokio::test]
     async fn fallback_ladder_switches_provider_on_hard_failure() {
-        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::atomic::AtomicU32;
 
         struct FallbackOkProvider;
         #[async_trait]
@@ -3385,14 +3456,14 @@ mod tests {
         agent.provider = Arc::new(RwLock::new(
             Box::new(AlwaysFailProvider) as Box<dyn Provider>
         ));
-        agent.fallback_models = vec!["mock2".to_owned()];
+        *agent.fallback_models.write().await = vec!["mock2".to_owned()];
 
         let resolve_calls = Arc::new(AtomicU32::new(0));
         agent.provider_resolver = Arc::new(ScriptedResolver({
             let resolve_calls = resolve_calls.clone();
             move |candidate: &str| {
                 assert_eq!(candidate, "mock2");
-                resolve_calls.fetch_add(1, Ordering::SeqCst);
+                resolve_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Ok(Box::new(FallbackOkProvider) as Box<dyn Provider>)
             }
         }));
@@ -3405,7 +3476,7 @@ mod tests {
             .expect("ladder must succeed via fallback switch");
 
         assert_eq!(resp.text, "response from fallback");
-        assert_eq!(resolve_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(resolve_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(
             agent.provider.read().await.name(),
             "fallback",
@@ -3423,7 +3494,7 @@ mod tests {
             Box::new(AlwaysFailProvider) as Box<dyn Provider>
         ));
         assert!(
-            agent.fallback_models.is_empty(),
+            agent.fallback_models.read().await.is_empty(),
             "make_loop fixture defaults to no fallback list"
         );
 
@@ -3446,8 +3517,175 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fallback_models_hot_swaps_via_cloned_handle_without_mut_agent() {
+        // Fabric-ready seam (bastion-agent/src/proposals.rs's TODO(A4 seam)):
+        // a caller holding a CLONE of `agent.fallback_models` (never `&mut
+        // AgentLoop`) can update the ladder on a running loop, and the next
+        // read sees it immediately. This is the exact shape `res.provider`
+        // already has (`Arc<RwLock<..>>`, cloned into shared app state) —
+        // this test proves `fallback_models` now has the same shape.
+        let f = NamedTempFile::new().unwrap();
+        let path = f.path().to_str().unwrap().to_owned();
+        let agent = make_loop(&path).await;
+
+        assert!(agent.fallback_models.read().await.is_empty());
+
+        // Simulate what bastion-agent's `/proposal approve` handler does:
+        // clone the handle at construction time, hold it separately from the
+        // `AgentLoop` itself, and write to it later with no `&mut` access to
+        // the loop at all.
+        let handle: SharedFallbackModels = agent.fallback_models.clone();
+        *handle.write().await = vec!["gpt-4o".to_owned(), "gpt-4o-mini".to_owned()];
+
+        assert_eq!(
+            *agent.fallback_models.read().await,
+            vec!["gpt-4o".to_owned(), "gpt-4o-mini".to_owned()],
+            "write through a cloned handle must be visible on the original agent, \
+             live, with no restart and no &mut AgentLoop"
+        );
+    }
+
+    /// Provider that calls one tool on its first `complete()`, then returns
+    /// plain text (no more tool calls) so the loop terminates — just enough
+    /// to drive `run_provider_fallback`'s dispatch loop through exactly one
+    /// tool round.
+    struct ToolCallOnceProvider {
+        called: std::sync::atomic::AtomicBool,
+    }
+    impl ToolCallOnceProvider {
+        fn new() -> Self {
+            Self {
+                called: std::sync::atomic::AtomicBool::new(false),
+            }
+        }
+    }
+    #[async_trait]
+    impl Provider for ToolCallOnceProvider {
+        async fn complete(&self, _: &[Message], _: &CallConfig) -> anyhow::Result<LlmResponse> {
+            let usage = crate::types::TokenUsage {
+                input_tokens: 10,
+                output_tokens: 10,
+                ..Default::default()
+            };
+            if !self.called.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                Ok(LlmResponse {
+                    text: String::new(),
+                    tool_calls: Some(vec![crate::types::ToolCall {
+                        id: "call_1".to_owned(),
+                        name: "rm_rf".to_owned(),
+                        arguments: serde_json::json!({}),
+                        extra: None,
+                    }]),
+                    usage,
+                })
+            } else {
+                Ok(LlmResponse {
+                    text: "final answer after tool round".to_owned(),
+                    tool_calls: None,
+                    usage,
+                })
+            }
+        }
+        async fn complete_simple(&self, _: &str) -> anyhow::Result<String> {
+            Ok("ok".to_owned())
+        }
+        fn context_limit(&self) -> usize {
+            8192
+        }
+        fn model_name(&self) -> &str {
+            "mock-tool-call-once"
+        }
+        fn name(&self) -> &'static str {
+            "mock"
+        }
+    }
+
+    /// `ToolSource` that records whether it was ever actually invoked — used
+    /// to prove a denied tool call never reaches dispatch, not merely that
+    /// dispatch itself would have failed for an unrelated reason.
+    struct CountingToolSource {
+        calls: std::sync::atomic::AtomicU32,
+    }
+    #[async_trait]
+    impl crate::agent::ports::ToolSource for CountingToolSource {
+        async fn tool_defs(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+            Ok(vec![])
+        }
+        async fn call_tool_with_timeout(
+            &self,
+            _name: &str,
+            _args: serde_json::Value,
+            _owner: &str,
+            _resolved_tier: Option<PrivacyTier>,
+        ) -> anyhow::Result<serde_json::Value> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(serde_json::json!({"ok": true}))
+        }
+    }
+
+    #[tokio::test]
+    async fn run_provider_fallback_denies_tool_outside_allowed_tools() {
+        // Task 3 (run_provider_fallback authority gate): a persona attributed
+        // to this turn (even though route_text ended up empty, which is why
+        // this path runs at all) has an allowlist that does NOT include
+        // "rm_rf" — the call must be denied BEFORE it reaches the tool
+        // source, exactly like `dispatch_tool_loop`'s own bypass branch
+        // already does (`capability::registry::tests::check_tool_allowed_*`).
+        let f = NamedTempFile::new().unwrap();
+        let path = f.path().to_str().unwrap().to_owned();
+        let mut agent = make_loop(&path).await;
+
+        agent.provider = Arc::new(RwLock::new(
+            Box::new(ToolCallOnceProvider::new()) as Box<dyn Provider>
+        ));
+        let tool_source = Arc::new(CountingToolSource {
+            calls: std::sync::atomic::AtomicU32::new(0),
+        });
+        agent.tool_source = tool_source.clone();
+
+        let allowed_tools: Option<Arc<std::collections::HashSet<String>>> =
+            Some(Arc::new(std::collections::HashSet::from(["git".to_owned()])));
+
+        let mut history: Vec<Message> = vec![];
+        let session_id = agent.session_id.clone();
+        let text = agent
+            .run_provider_fallback(
+                &mut history,
+                &session_id,
+                "test-owner",
+                "do something",
+                Some(PrivacyTier::CloudOk),
+                Some("some-persona"),
+                allowed_tools,
+            )
+            .await
+            .expect("denial is a tagged tool result, not a propagated error");
+
+        assert_eq!(text, "final answer after tool round");
+        assert_eq!(
+            tool_source.calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the disallowed tool must never reach the ToolSource — denied before dispatch"
+        );
+        let denial_recorded = history.iter().any(|m| match &m.content {
+            MessageContent::Parts(parts) => parts.iter().any(|p| match p {
+                ContentPart::ToolResult { content, .. } => {
+                    let s = format!("{content:?}");
+                    s.contains("rm_rf") && s.contains("allowed tool list")
+                }
+                _ => false,
+            }),
+            _ => false,
+        });
+        assert!(
+            denial_recorded,
+            "history must record the tool-authority denial for rm_rf, got: {history:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn fallback_ladder_rechecks_egress_before_switching_and_before_retry() {
-        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::atomic::AtomicBool;
 
         // A resolvable fallback whose provider NAME ("anthropic") is a cloud
         // provider — check_egress(LocalOnly, "anthropic") must block it BEFORE
@@ -3458,7 +3696,7 @@ mod tests {
         #[async_trait]
         impl Provider for NeverCalledCloudProvider {
             async fn complete(&self, _: &[Message], _: &CallConfig) -> anyhow::Result<LlmResponse> {
-                self.called.store(true, Ordering::SeqCst);
+                self.called.store(true, std::sync::atomic::Ordering::SeqCst);
                 Ok(LlmResponse {
                     text: "should never be returned".to_owned(),
                     tool_calls: None,
@@ -3486,7 +3724,7 @@ mod tests {
         agent.provider = Arc::new(RwLock::new(
             Box::new(AlwaysFailProvider) as Box<dyn Provider>
         ));
-        agent.fallback_models = vec!["gpt-4o".to_owned()];
+        *agent.fallback_models.write().await = vec!["gpt-4o".to_owned()];
 
         let called = Arc::new(AtomicBool::new(false));
         agent.provider_resolver = Arc::new(ScriptedResolver({
@@ -3506,7 +3744,7 @@ mod tests {
             .expect_err("egress-blocked fallback provider must return the egress error");
 
         assert!(
-            !called.load(Ordering::SeqCst),
+            !called.load(std::sync::atomic::Ordering::SeqCst),
             "the fallback provider's complete() must never be called — egress must \
              block before the retry"
         );

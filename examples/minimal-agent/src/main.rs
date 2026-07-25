@@ -83,6 +83,9 @@ impl Responder for EchoResponder {
             text,
             attribution: vec!["minimal-agent".to_string()],
             turn_tier: Some(PrivacyTier::CloudOk),
+            // No real persona registry in this example — unrestricted, same
+            // as the default v1/no-`tools:` persona contract.
+            allowed_tools: None,
         })
     }
 }

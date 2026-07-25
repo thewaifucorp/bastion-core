@@ -220,6 +220,17 @@ impl Responder for PersonaResponder {
             .first()
             .and_then(|name| self.registry.get(name).map(|p| p.tier));
 
+        // Same resolution as turn_tier, same reason: this is threaded into
+        // `RespondOutcome.allowed_tools` so `run_provider_fallback` (reached
+        // when route_text ends up empty but a persona is still attributed to
+        // the turn) enforces this persona's Policy 0 tool-authority contract
+        // instead of running unrestricted. Reuses the same helper the
+        // single/parallel dispatch path below already calls per-persona.
+        let fallback_allowed_tools: Option<Arc<HashSet<String>>> = decision
+            .personas
+            .first()
+            .and_then(|name| resolve_allowed_tools(self.registry.get(name)));
+
         // SEAM #2: the active persona name scopes belief recall (persona-tagged + global).
         // Resolved ONCE here (like turn_tier) and threaded into build_system_prompt on the
         // single/parallel path, so recall never crosses persona boundaries. `None` (no
@@ -311,6 +322,7 @@ impl Responder for PersonaResponder {
             text: route_text,
             attribution,
             turn_tier,
+            allowed_tools: fallback_allowed_tools,
         })
     }
 }
