@@ -254,7 +254,12 @@ impl Memory for SqliteMemory {
         .await?
     }
 
-    async fn reinforce_persona_belief(&self, owner_id: &str, id: i64, delta: f64) -> anyhow::Result<()> {
+    async fn reinforce_persona_belief(
+        &self,
+        owner_id: &str,
+        id: i64,
+        delta: f64,
+    ) -> anyhow::Result<()> {
         if !delta.is_finite() || delta < 0.0 {
             anyhow::bail!("reinforcement delta must be finite and non-negative");
         }
@@ -277,7 +282,12 @@ impl Memory for SqliteMemory {
         .await?
     }
 
-    async fn weaken_persona_belief(&self, owner_id: &str, id: i64, delta: f64) -> anyhow::Result<()> {
+    async fn weaken_persona_belief(
+        &self,
+        owner_id: &str,
+        id: i64,
+        delta: f64,
+    ) -> anyhow::Result<()> {
         if !delta.is_finite() || delta < 0.0 {
             anyhow::bail!("weaken delta must be finite and non-negative");
         }

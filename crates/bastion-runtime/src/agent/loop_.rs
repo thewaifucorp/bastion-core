@@ -2225,22 +2225,20 @@ impl AgentLoop {
                         // the `Responder` from the persona attributed to this turn, if any) —
                         // this path runs when `route_text` was empty, which can still mean a
                         // real persona handled (and is attributed to) the turn.
-                        let dispatch = match crate::capability::check_tool_allowed(
-                            &allowed_tools,
-                            &tc.name,
-                        ) {
-                            Ok(()) => {
-                                self.tool_source
-                                    .call_tool_with_timeout(
-                                        &tc.name,
-                                        tc.arguments.clone(),
-                                        owner,
-                                        resolved_tier,
-                                    )
-                                    .await
-                            }
-                            Err(e) => Err(e),
-                        };
+                        let dispatch =
+                            match crate::capability::check_tool_allowed(&allowed_tools, &tc.name) {
+                                Ok(()) => {
+                                    self.tool_source
+                                        .call_tool_with_timeout(
+                                            &tc.name,
+                                            tc.arguments.clone(),
+                                            owner,
+                                            resolved_tier,
+                                        )
+                                        .await
+                                }
+                                Err(e) => Err(e),
+                            };
                         let tagged = tag_bypass_result(&tc.name, dispatch);
 
                         // D-06: handle skill_reloaded signal from skill-writer container
@@ -3659,8 +3657,9 @@ mod tests {
         });
         agent.tool_source = tool_source.clone();
 
-        let allowed_tools: Option<Arc<std::collections::HashSet<String>>> =
-            Some(Arc::new(std::collections::HashSet::from(["git".to_owned()])));
+        let allowed_tools: Option<Arc<std::collections::HashSet<String>>> = Some(Arc::new(
+            std::collections::HashSet::from(["git".to_owned()]),
+        ));
 
         let mut history: Vec<Message> = vec![];
         let session_id = agent.session_id.clone();
