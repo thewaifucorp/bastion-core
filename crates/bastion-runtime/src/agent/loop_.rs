@@ -3225,6 +3225,22 @@ mod tests {
         ) -> anyhow::Result<u64> {
             Ok(0)
         }
+        async fn reinforce_persona_belief(
+            &self,
+            _owner_id: &str,
+            _id: i64,
+            _delta: f64,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn weaken_persona_belief(
+            &self,
+            _owner_id: &str,
+            _id: i64,
+            _delta: f64,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
         async fn record_pending_correction(
             &self,
             _owner_id: &str,
