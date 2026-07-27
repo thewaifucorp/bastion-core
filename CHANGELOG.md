@@ -7,6 +7,8 @@ version).
 
 ## Unreleased
 
+## 0.3.0 — 2026-07-27
+
 ### Added
 
 - Persona contract v2: SOUL.md front-matter (`bastion-personas::persona::soul::PersonaFront`)
@@ -31,9 +33,45 @@ version).
   `allowed_tools: None` (no `tools:` declared, or no persona resolved)
   stays unrestricted: every existing persona and every non-persona-scoped
   `InvokeCtx` construction site keeps working exactly as before.
+- Policy 0 now also covers `run_provider_fallback`, the one dispatch path
+  that predated the gate and reached `call_tool_with_timeout` with no
+  `check_tool_allowed`: a persona with a `tools:` allowlist could still
+  reach any tool through it whenever `route_text` came back empty for a
+  turn still attributed to that persona. `RespondOutcome` carries
+  `allowed_tools` (resolved by the Responder, for the same reason
+  `turn_tier` already is — the `PersonaRegistry` lives in
+  `bastion-personas`, not the kernel) and `run_provider_fallback` gates on
+  it with the identical wrap. `docs/SECURITY-INVARIANTS.md` §9 updated.
+- Two fabric-ready kernel seams in `AgentLoop` (`docs/VERSIONING.md` §6),
+  both gating a future 1.0 tag: `fallback_models` becomes
+  `SharedFallbackModels` (`Arc<RwLock<..>>`, same shape as `provider`) so a
+  cloned handle can hot-swap the fallback ladder on a running loop with no
+  `&mut AgentLoop` and no restart — constructor signature unchanged; and a
+  new `compaction_provider: Option<SharedProvider>` field plus
+  `with_compaction_provider` builder points `AutoCompact::compact`'s
+  summarization at a provider distinct from the turn's conversational one
+  (`None` is byte-identical to pre-seam behavior).
+- Persona-tagged stigmergy in the `Memory` trait:
+  `reinforce_persona_belief` and `weaken_persona_belief` mirror the existing
+  untagged pair but scope to `persona_tag IS NOT NULL`, which nothing could
+  reinforce or weaken before despite the column and
+  `retrieve_tagged(owner, Some(persona))` existing since the original
+  schema. Reinforce keeps the `MIN(weight + delta, 100.0)` cap and the
+  non-negative-delta validation; weaken subtracts floored at `0.0` and does
+  not itself revoke.
 
 ### Changed
 
+- **Breaking** (same mechanical-check caveat as below):
+  `cabinet::orchestrator::deliberate` gains a `user_input: &str` parameter
+  (see Fixed). `bastion-cognition` advances to `0.2.0`.
+- Cabinet staggers its parallel persona provider calls by
+  `PERSONA_SPAWN_STAGGER` (400ms × spawn index) before each task does
+  anything else — egress check, prompt building, the call. N personas
+  fanning out through a `JoinSet` fired at effectively the same instant,
+  which drew spurious 429s on free/low tiers that the same N calls spread
+  over a minute fit comfortably within: a 6-persona round routinely lost
+  4–5 of its 6 turns to rate limiting. Cheap against typical LLM latency.
 - **Breaking** (not caught by the mechanical `docs/api-baseline` check,
   which tracks item presence/name, not signatures — see
   `docs/VERSIONING.md` §2): `agent::ports::TurnKernel::run_tool_loop` gains
@@ -42,7 +80,26 @@ version).
   change. `bastion-types`, `bastion-runtime`, and `bastion-personas`
   advance to `0.2.0` for this and the `Persona`/`InvokeCtx` field additions
   above (exhaustive external struct literals against either type need
-  `..Default::default()` now).
+  `..Default::default()` now). `bastion-runtime` then advances to `0.2.1`
+  and `bastion-memory` to `0.1.1` for the additive `Memory` trait methods
+  above (both implementors in-workspace, updated in the same change).
+
+### Fixed
+
+- Cabinet personas never received the actual user question. `deliberate()`
+  had no parameter for the user's message and `RouterDecision` has no field
+  to carry it, so the question only ever lived inside
+  `persona::router::route()`'s own LLM call: `build_turn_prompt()` promised
+  "Provide your position on the matter below" and then included no matter,
+  in every round, for every past and current use of Cabinet mode. Personas
+  reasoned only about their own system prompt — and, on replies, about a
+  transcript of other personas also reasoning about nothing. `deliberate()`
+  and `build_turn_prompt()` now thread `user_input` into a `Matter: {…}`
+  line in both the Position (R1) and Reply (R2+) branches, and the Cabinet
+  dispatch arm in `responder.rs` passes the real input instead of dropping
+  it. Regression test inspects the message actually sent to the provider
+  (not `config.system_prompt`) and asserts the question appears verbatim in
+  every turn across both rounds.
 
 ## 0.2.0 — 2026-07-20
 
