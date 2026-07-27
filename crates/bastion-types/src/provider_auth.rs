@@ -357,23 +357,38 @@ mod tests {
         );
     }
 
+    /// Note the shape of these assertions: `expect_err`/`unwrap_err` require
+    /// `T: Debug`, and `ResolvedProviderCredential` deliberately has no
+    /// `Debug` — so the error path has to be matched explicitly. That
+    /// compile-time friction IS the BPAUTH-02 guarantee showing up at a call
+    /// site; it is not worked around by adding the derive.
+    fn expect_auth_error(
+        result: Result<ResolvedProviderCredential, ProviderAuthError>,
+        expected: ProviderAuthError,
+    ) {
+        match result {
+            Ok(_) => panic!("expected {expected:?}, but a credential was resolved"),
+            Err(err) => assert_eq!(err, expected),
+        }
+    }
+
     #[test]
     fn an_unknown_reference_is_missing_not_a_silent_empty_credential() {
         let resolver = MapResolver {
             entries: HashMap::new(),
         };
-        let err = resolver
-            .resolve(&ProviderAuthRef::new("alice", "anthropic", "default"))
-            .expect_err("an absent credential must fail");
-        assert_eq!(err, ProviderAuthError::Missing);
+        expect_auth_error(
+            resolver.resolve(&ProviderAuthRef::new("alice", "anthropic", "default")),
+            ProviderAuthError::Missing,
+        );
     }
 
     #[test]
     fn the_null_resolver_fails_closed() {
-        let err = NullProviderAuthResolver
-            .resolve(&ProviderAuthRef::new("alice", "openai", "default"))
-            .expect_err("the fail-closed default must never resolve");
-        assert_eq!(err, ProviderAuthError::Missing);
+        expect_auth_error(
+            NullProviderAuthResolver.resolve(&ProviderAuthRef::new("alice", "openai", "default")),
+            ProviderAuthError::Missing,
+        );
     }
 
     /// BPAUTH-02, the part a type system can enforce: the reference is safe
