@@ -9,6 +9,42 @@ version).
 
 ### Added
 
+- Subscription credential lifecycle
+  (`bastion-runtime::provider_auth::ProviderCredentialLifecycle`), the state
+  machine every subscription connector shares instead of re-inventing:
+  - **Single-flight refresh per `ProviderAuthRef`.** N concurrent refreshes of
+    the same reference produce exactly one upstream call and every caller gets
+    that result. Not an optimization — OAuth refresh tokens are commonly
+    single-use, so a second concurrent exchange invalidates the token the first
+    just rotated and leaves the credential unusable. Different references never
+    block each other.
+  - **Typed failure transitions.** A transient failure (`Expired`,
+    `Throttled`) enters `Cooldown` with a deadline from an injected
+    `BackoffPolicy` and a persisted consecutive-failure counter, so the wait
+    grows and survives a restart; a success resets it. Anything else is
+    terminal: `ReauthRequired`, or `Revoked` for an upstream revocation —
+    which is deliberately not `ReauthRequired`, because re-authenticating the
+    same reference is not the remedy. While in cooldown, no upstream call is
+    spent at all.
+  - **Host-owned persistence through `CredentialStateStore`**, whose
+    `compare_and_swap` is what makes an interrupted update safe: a losing
+    racer returns `false` rather than erroring, a storage failure leaves the
+    last valid record untouched, and a transition computed from stale state is
+    refused instead of applied — which is what stops a stale conclusion from
+    resurrecting a revoked credential.
+  - **`ProviderCredentialRefresher`** is the connector-facing port: two
+    straight-line calls (exchange, revoke), inheriting single-flight, backoff,
+    transitions and persistence. Those behaviors are tested once here against
+    a fake instead of once per vendor against a live account.
+  - `revoke` marks local state `Revoked` even when the vendor call fails or
+    offers no revocation endpoint — an operator's revocation must not depend on
+    vendor support — and touches only the requested reference (proven with two
+    owners × two profiles). `forget` deletes the record and is deliberately
+    separate: it never claims an upstream revocation.
+  - `Clock` and `BackoffPolicy` are injected so every deadline is asserted
+    without sleeping. Nothing in the module can enumerate other credentials, so
+    a failure can never fall back to another profile, owner or provider.
+  - `bastion-runtime` advances to `0.2.2` (additive).
 - Provider authentication contracts (`bastion-types::provider_auth`), the
   first slice of subscription-backed model providers: `ProviderAuthRef`
   (owner + provider + profile, opaque identifiers only), `CredentialKind`

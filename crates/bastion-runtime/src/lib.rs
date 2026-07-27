@@ -13,6 +13,7 @@ pub mod capability;
 pub mod hooks;
 pub mod memory;
 pub mod provider;
+pub mod provider_auth;
 pub mod session;
 pub mod task;
 
