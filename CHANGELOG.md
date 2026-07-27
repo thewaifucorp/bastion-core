@@ -11,6 +11,36 @@ version).
 
 ### Added
 
+- Provider authentication contracts (`bastion-types::provider_auth`), the
+  first slice of subscription-backed model providers: `ProviderAuthRef`
+  (owner + provider + profile, opaque identifiers only), `CredentialKind`
+  (`ApiKey` | `OAuthSubscription`), `ProviderAuthState`
+  (`Ready`/`Refreshing`/`Cooldown`/`ReauthRequired`/`Revoked`),
+  `ProviderAuthError` as a closed 7-variant vocabulary, the
+  `ProviderAuthResolver` port plus its fail-closed `NullProviderAuthResolver`,
+  and `ResolvedProviderCredential`.
+  - The point of the slice is separating WHO authenticates a model call from
+    WHAT executes the turn: a subscription can authenticate inference while
+    the kernel keeps the loop, session, tool gate and memory. Nothing in the
+    module can select, construct or invoke an `AgentRuntime`.
+  - `ResolvedProviderCredential` implements no `Debug`, `Display`,
+    `Serialize` or `Deserialize`, and wraps a `SecretValue` (which redacts) —
+    a struct holding one cannot be serialized into a config dump, export or
+    error payload, because the compiler refuses. `expose_secret` is the one
+    grep-able accessor.
+  - `ProviderAuthError` has no free-form detail field, so a failure cannot
+    carry an upstream response body or token into a message; hosts map
+    upstream failures onto the closed vocabulary and keep raw diagnosis in
+    their own logs at the call site. `is_transient` classifies retry-worthy
+    (`Expired`, `Throttled`) versus terminal, in the contract rather than in
+    each host's guess.
+  - `bastion-types` advances to `0.2.1` (additive).
+  - Resolution stays synchronous for the same reason `SecretResolver` is: it
+    happens when a provider is built or a credential refreshed, never per
+    token on a hot path, so this crate keeps no async-runtime dependency.
+
+### Added
+
 - Persona contract v2: SOUL.md front-matter (`bastion-personas::persona::soul::PersonaFront`)
   gains `objectives`, `goals`, `tools` (capability allowlist), and `scope`,
   all `#[serde(default)]` so pre-v2 SOUL.md files keep parsing unchanged.
