@@ -254,6 +254,62 @@ impl Memory for SqliteMemory {
         .await?
     }
 
+    async fn reinforce_persona_belief(
+        &self,
+        owner_id: &str,
+        id: i64,
+        delta: f64,
+    ) -> anyhow::Result<()> {
+        if !delta.is_finite() || delta < 0.0 {
+            anyhow::bail!("reinforcement delta must be finite and non-negative");
+        }
+
+        let path = self.db_path.clone();
+        let owner_id = owner_id.to_owned();
+        task::spawn_blocking(move || {
+            let conn = Connection::open(&path)?;
+            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")?;
+            // Mirror of reinforce_belief, restricted to persona_tag IS NOT NULL instead of
+            // IS NULL — the two are deliberately disjoint sets of rows.
+            conn.execute(
+                "UPDATE beliefs SET weight = MIN(weight + ?3, 100.0) \
+                 WHERE id = ?1 AND owner_id = ?2 AND revoked = 0 \
+                       AND kind = 'procedural' AND persona_tag IS NOT NULL",
+                rusqlite::params![id, owner_id, delta],
+            )?;
+            Ok::<(), anyhow::Error>(())
+        })
+        .await?
+    }
+
+    async fn weaken_persona_belief(
+        &self,
+        owner_id: &str,
+        id: i64,
+        delta: f64,
+    ) -> anyhow::Result<()> {
+        if !delta.is_finite() || delta < 0.0 {
+            anyhow::bail!("weaken delta must be finite and non-negative");
+        }
+
+        let path = self.db_path.clone();
+        let owner_id = owner_id.to_owned();
+        task::spawn_blocking(move || {
+            let conn = Connection::open(&path)?;
+            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")?;
+            // Floored at 0.0, never negative; 0 coincides with the revoked-sentinel weight
+            // but this call never sets `revoked` itself — the row stays retrievable-by-id.
+            conn.execute(
+                "UPDATE beliefs SET weight = MAX(weight - ?3, 0.0) \
+                 WHERE id = ?1 AND owner_id = ?2 AND revoked = 0 \
+                       AND kind = 'procedural' AND persona_tag IS NOT NULL",
+                rusqlite::params![id, owner_id, delta],
+            )?;
+            Ok::<(), anyhow::Error>(())
+        })
+        .await?
+    }
+
     async fn load_core(&self, owner_id: &str) -> anyhow::Result<Vec<Belief>> {
         let path = self.db_path.clone();
         let owner_id = owner_id.to_owned();
@@ -1059,6 +1115,158 @@ mod tests {
         assert!(
             bob_pending.is_empty(),
             "no cross-owner correction row must be inserted"
+        );
+    }
+
+    async fn store_persona_belief(mem: &SqliteMemory, owner: &str, persona: &str) -> i64 {
+        use crate::BeliefDraft;
+        mem.store_procedural_belief(BeliefDraft {
+            owner_id: owner.to_string(),
+            persona_tag: Some(persona.to_string()),
+            issue: None,
+            insight: format!("{persona} track record"),
+            keywords: vec![],
+            session_id: "s".to_string(),
+            source: "test".to_string(),
+            tier: Some(PrivacyTier::LocalOnly),
+        })
+        .await
+        .expect("store persona belief")
+    }
+
+    #[tokio::test]
+    async fn reinforce_persona_belief_only_touches_persona_tagged_row() {
+        let (_f, mem) = make_db().await;
+        let tagged = store_persona_belief(&mem, "alice", "fundamentalist").await;
+        let untagged = mem
+            .store_procedural_belief(crate::BeliefDraft {
+                owner_id: "alice".to_string(),
+                persona_tag: None,
+                issue: None,
+                insight: "general playbook entry".to_string(),
+                keywords: vec![],
+                session_id: "s".to_string(),
+                source: "test".to_string(),
+                tier: Some(PrivacyTier::LocalOnly),
+            })
+            .await
+            .expect("store untagged");
+
+        mem.reinforce_persona_belief("alice", tagged, 5.0)
+            .await
+            .expect("reinforce");
+
+        let tagged_row = mem
+            .retrieve_tagged("alice", Some("fundamentalist"))
+            .await
+            .expect("retrieve tagged")
+            .into_iter()
+            .find(|b| b.id == tagged)
+            .expect("tagged row present");
+        assert_eq!(tagged_row.weight, 6.0, "1.0 default + 5.0 delta");
+
+        let untagged_row = mem
+            .retrieve_tagged("alice", None)
+            .await
+            .expect("retrieve untagged")
+            .into_iter()
+            .find(|b| b.id == untagged)
+            .expect("untagged row present");
+        assert_eq!(
+            untagged_row.weight, 1.0,
+            "reinforce_persona_belief must not touch an untagged row"
+        );
+    }
+
+    #[tokio::test]
+    async fn reinforce_belief_ignores_persona_tagged_row() {
+        // The two reinforcement methods target disjoint row sets (persona_tag IS NULL
+        // vs IS NOT NULL) — confirm the existing untagged-only method silently no-ops
+        // on a persona-tagged id instead of accidentally reinforcing it.
+        let (_f, mem) = make_db().await;
+        let tagged = store_persona_belief(&mem, "alice", "contrarian").await;
+
+        mem.reinforce_belief("alice", tagged, 5.0)
+            .await
+            .expect("reinforce_belief is best-effort, must not error on no-match");
+
+        let row = mem
+            .retrieve_tagged("alice", Some("contrarian"))
+            .await
+            .expect("retrieve")
+            .into_iter()
+            .find(|b| b.id == tagged)
+            .expect("row present");
+        assert_eq!(
+            row.weight, 1.0,
+            "reinforce_belief must not touch a persona-tagged row"
+        );
+    }
+
+    #[tokio::test]
+    async fn weaken_persona_belief_decreases_and_floors_at_zero() {
+        let (_f, mem) = make_db().await;
+        let tagged = store_persona_belief(&mem, "alice", "macro").await;
+
+        mem.weaken_persona_belief("alice", tagged, 0.4)
+            .await
+            .expect("weaken");
+        let row = mem
+            .retrieve_tagged("alice", Some("macro"))
+            .await
+            .expect("retrieve")
+            .into_iter()
+            .find(|b| b.id == tagged)
+            .expect("row present");
+        assert_eq!(row.weight, 0.6, "1.0 default - 0.4 delta");
+
+        // A second, larger weaken must floor at 0.0 rather than go negative.
+        mem.weaken_persona_belief("alice", tagged, 10.0)
+            .await
+            .expect("weaken past zero");
+        let row = mem
+            .retrieve_tagged("alice", Some("macro"))
+            .await
+            .expect("retrieve after floor");
+        // weight=0 falls outside retrieve_tagged's `weight > 0` gate, so the row is
+        // now invisible to retrieval — assert via the empty result instead of a field.
+        assert!(
+            row.is_empty(),
+            "weight floored at 0.0 must fall out of retrieve_tagged's weight > 0 gate"
+        );
+    }
+
+    #[tokio::test]
+    async fn weaken_persona_belief_ignores_untagged_row() {
+        let (_f, mem) = make_db().await;
+        let untagged = mem
+            .store_procedural_belief(crate::BeliefDraft {
+                owner_id: "alice".to_string(),
+                persona_tag: None,
+                issue: None,
+                insight: "general playbook entry".to_string(),
+                keywords: vec![],
+                session_id: "s".to_string(),
+                source: "test".to_string(),
+                tier: Some(PrivacyTier::LocalOnly),
+            })
+            .await
+            .expect("store untagged");
+
+        mem.weaken_persona_belief("alice", untagged, 0.5)
+            .await
+            .expect("weaken is best-effort, must not error on no-match");
+
+        let row = mem
+            .retrieve_tagged("alice", None)
+            .await
+            .expect("retrieve")
+            .into_iter()
+            .find(|b| b.id == untagged)
+            .expect("row present");
+        assert_eq!(
+            row.weight, 1.0,
+            "weaken_persona_belief must not touch an untagged row"
         );
     }
 

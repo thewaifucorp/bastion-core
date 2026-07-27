@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "bastion-memory"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -413,7 +413,7 @@ dependencies = [
 
 [[package]]
 name = "bastion-runtime"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-trait",

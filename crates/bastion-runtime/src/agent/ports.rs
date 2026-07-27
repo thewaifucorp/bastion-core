@@ -524,4 +524,15 @@ pub struct RespondOutcome {
     /// that can resolve a persona name to a tier — now lives inside the
     /// `Responder`, not the kernel.
     pub turn_tier: Option<PrivacyTier>,
+    /// Persona contract v2 (Policy 0) tool-authority gate for the same
+    /// attributed persona, resolved the SAME way and for the SAME reason as
+    /// `turn_tier` above: `PersonaRegistry` lives in the `Responder`, not the
+    /// kernel, so it must hand the resolved allowlist across the port.
+    /// `None` = unrestricted (no persona matched, or the matched persona
+    /// declared no `tools:`). Threaded into `run_provider_fallback` so that
+    /// path — reached when `route_text` is empty but a persona still handled
+    /// (and is attributed to) the turn — enforces the same gate
+    /// `dispatch_tool_loop`'s registry-bypass branch already does, instead of
+    /// silently running unrestricted.
+    pub allowed_tools: Option<Arc<HashSet<String>>>,
 }

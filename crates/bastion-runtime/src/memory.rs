@@ -109,6 +109,29 @@ pub trait Memory: Send + Sync {
         floor: f64,
     ) -> anyhow::Result<u64>;
 
+    /// Stigmergic reinforcement, PERSONA-TAGGED sibling of `reinforce_belief`: add `delta`
+    /// to ONE persona-tagged procedural belief's `weight`, capped at 100.0 — the mirror
+    /// image of `reinforce_belief`'s `persona_tag IS NULL` restriction. Owner-scoped and
+    /// best-effort (no-match is a silent no-op), same discipline as `reinforce_belief`.
+    async fn reinforce_persona_belief(
+        &self,
+        owner_id: &str,
+        id: i64,
+        delta: f64,
+    ) -> anyhow::Result<()>;
+
+    /// Stigmergic punishment, persona-tagged: subtract `delta` from ONE persona-tagged
+    /// procedural belief's `weight`, floored at 0.0 (never negative — 0 is the
+    /// revoked-sentinel weight already used by `revoke_belief`, so this can visually
+    /// coincide with "no trust left" without actually revoking the row). Owner-scoped and
+    /// best-effort, same discipline as `reinforce_persona_belief`.
+    async fn weaken_persona_belief(
+        &self,
+        owner_id: &str,
+        id: i64,
+        delta: f64,
+    ) -> anyhow::Result<()>;
+
     /// Enqueue a metadata-only pending-correction signal for `belief_id` (LEARN-04
     /// edit half). Called synchronously right after a contestation revoke — never
     /// carries raw text. Drained by the offline Reflector (07-05) via

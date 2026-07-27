@@ -23,6 +23,7 @@ fn agent/handle.rs:channel
 struct agent/loop_.rs:AgentLoop
 const agent/loop_.rs:DEFAULT_OWNER
 struct agent/loop_.rs:PendingItem
+type agent/loop_.rs:SharedFallbackModels
 fn agent/loop_.rs:add_context_provider
 fn agent/loop_.rs:build_system_prompt_parts
 fn agent/loop_.rs:cancel_delegated_task
@@ -38,6 +39,7 @@ fn agent/loop_.rs:run_turn_for
 fn agent/loop_.rs:run_turn_for_with_trust
 fn agent/loop_.rs:with_auth_resolver
 fn agent/loop_.rs:with_backend_profile
+fn agent/loop_.rs:with_compaction_provider
 fn agent/loop_.rs:with_deployment_context
 fn agent/loop_.rs:with_permission_gate
 fn agent/loop_.rs:with_permission_timeout
