@@ -7,8 +7,6 @@ version).
 
 ## Unreleased
 
-## 0.3.0 — 2026-07-27
-
 ### Added
 
 - Provider authentication contracts (`bastion-types::provider_auth`), the
@@ -38,6 +36,9 @@ version).
   - Resolution stays synchronous for the same reason `SecretResolver` is: it
     happens when a provider is built or a credential refreshed, never per
     token on a hot path, so this crate keeps no async-runtime dependency.
+
+
+## 0.3.0 — 2026-07-27
 
 ### Added
 
