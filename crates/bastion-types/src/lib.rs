@@ -9,6 +9,12 @@ pub use secret::{NullSecretResolver, SecretRef, SecretResolver, SecretValue};
 pub mod context_artifact;
 pub use context_artifact::{ContextRevision, StalePolicy, VersionedContextArtifact};
 
+pub mod provider_auth;
+pub use provider_auth::{
+    CredentialKind, NullProviderAuthResolver, ProviderAuthError, ProviderAuthRef,
+    ProviderAuthResolver, ProviderAuthState, ResolvedProviderCredential,
+};
+
 pub mod deployment;
 pub use deployment::{
     DeploymentContext, DeploymentMode, EffectAudit, EffectContext, PolicyDecision,
