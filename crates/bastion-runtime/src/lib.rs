@@ -14,6 +14,7 @@ pub mod hooks;
 pub mod memory;
 pub mod provider;
 pub mod provider_auth;
+pub mod provider_conformance;
 pub mod session;
 pub mod task;
 
