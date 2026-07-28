@@ -9,6 +9,50 @@ version).
 
 ### Added
 
+- Provider catalog, usage and support descriptors
+  (`bastion-types::provider_catalog`) plus the shared conformance suite
+  (`bastion-runtime::provider_conformance`) — the gate every subscription
+  connector passes before it can be called supported:
+  - Capabilities are declared PER MODEL and individually (`ModelCapability`:
+    streaming, tools, structured output, cancellation, usage). Text completion
+    working says nothing about tool calls, which is how a connector ships
+    looking finished and fails later at the first tool call or 429. An empty
+    capability set means text-only, never "everything".
+  - `ProviderUsageSnapshot` makes every quantity optional, and absent means
+    *unknown* — never zero, never unlimited. There is deliberately no helper
+    computing `remaining` from `limit - used`: vendors count differently
+    (requests vs tokens, window vs billing period), so that subtraction
+    publishes a number nobody reported. Serialization omits unknown fields
+    entirely rather than emitting nulls a client might coerce to 0, and
+    `UsageSource` records whether a number came from the vendor or from local
+    accounting, which is blind to other clients' usage.
+  - `ProviderCatalog::select_model` returns a typed `CatalogError` for an
+    unknown model, an expired descriptor, or a missing capability, and never
+    substitutes another model — silently downgrading the model a caller chose
+    is how a weaker model ends up serving a request nobody redirected. Checks
+    run disabled-provider → unknown-model → expiry → capability so the error is
+    the actionable one.
+  - `SupportStatus::Supported` is unreachable by assignment: the field is
+    private and `ProviderSupportDescriptor::promote` requires all five pieces of
+    `SupportEvidence` (conformance, live E2E, secret scrub, owner isolation,
+    terms review) plus a tested version and date, reporting each missing one. A
+    custom `TryFrom` deserializer re-checks the same rule, so a hand-edited
+    file claiming supported without evidence fails to LOAD rather than being
+    trusted — the gate holds across persistence, not only in Rust.
+  - `run_conformance` drives a `&dyn Provider`, so it runs against a fake in CI
+    and a real connector in an opt-in live run. Baseline checks include a
+    prompt canary (a provider that ignores its input cannot pass on "it
+    returned some text"), catalog/provider model-name agreement, and a positive
+    context limit; declared capabilities are then each exercised, including
+    all-zero usage as the tell for a connector filling the struct instead of
+    reading the vendor.
+  - `CheckOutcome::Unverifiable` is deliberately not a pass. The kernel
+    `Provider` trait has no streaming method and no cancellation token, so a
+    connector declaring either is making a claim this suite cannot observe;
+    `promotion_ready` is false while any check is unverifiable, rather than
+    certifying it quietly.
+  - `bastion-types` advances to `0.2.2`, `bastion-runtime` to `0.2.3` (both
+    additive).
 - Subscription credential lifecycle
   (`bastion-runtime::provider_auth::ProviderCredentialLifecycle`), the state
   machine every subscription connector shares instead of re-inventing:

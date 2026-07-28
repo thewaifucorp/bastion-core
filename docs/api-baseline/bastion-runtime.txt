@@ -144,6 +144,7 @@ mod lib.rs:hooks
 mod lib.rs:memory
 mod lib.rs:provider
 mod lib.rs:provider_auth
+mod lib.rs:provider_conformance
 mod lib.rs:session
 mod lib.rs:task
 mod lib.rs:types
@@ -174,6 +175,13 @@ fn provider_auth.rs:ready
 fn provider_auth.rs:refresh
 fn provider_auth.rs:revoke
 fn provider_auth.rs:state
+enum provider_conformance.rs:CheckOutcome
+struct provider_conformance.rs:ConformanceCheck
+struct provider_conformance.rs:ConformanceReport
+fn provider_conformance.rs:failures
+fn provider_conformance.rs:promotion_ready
+fn provider_conformance.rs:run_conformance
+fn provider_conformance.rs:unverifiable
 use session/mod.rs:SessionManager
 mod session/mod.rs:sqlite
 struct session/sqlite.rs:SessionManager

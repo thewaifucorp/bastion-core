@@ -9,6 +9,13 @@ pub use secret::{NullSecretResolver, SecretRef, SecretResolver, SecretValue};
 pub mod context_artifact;
 pub use context_artifact::{ContextRevision, StalePolicy, VersionedContextArtifact};
 
+pub mod provider_catalog;
+pub use provider_catalog::{
+    CatalogError, MissingEvidence, ModelCapability, ProviderAuthFlow, ProviderCatalog,
+    ProviderModelDescriptor, ProviderSupportDescriptor, ProviderUsageSnapshot, SupportEvidence,
+    SupportStatus, UsageSource,
+};
+
 pub mod provider_auth;
 pub use provider_auth::{
     CredentialKind, NullProviderAuthResolver, ProviderAuthError, ProviderAuthRef,
