@@ -276,7 +276,9 @@ async fn check_tools(
         .complete(
             &[crate::types::Message {
                 role: crate::types::Role::User,
-                content: crate::types::MessageContent::Text("Call conformance_probe with ok=true.".to_string()),
+                content: crate::types::MessageContent::Text(
+                    "Call conformance_probe with ok=true.".to_string(),
+                ),
             }],
             &config,
         )
@@ -351,7 +353,10 @@ async fn check_structured_output(
         .complete(
             &[crate::types::Message {
                 role: crate::types::Role::User,
-                content: crate::types::MessageContent::Text("Answer with a JSON object holding a single \"answer\" field.".to_string()),
+                content: crate::types::MessageContent::Text(
+                    "Answer with a JSON object holding a single \"answer\" field."
+                        .to_string(),
+                ),
             }],
             &config,
         )
