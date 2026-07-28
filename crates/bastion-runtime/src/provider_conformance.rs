@@ -354,8 +354,7 @@ async fn check_structured_output(
             &[crate::types::Message {
                 role: crate::types::Role::User,
                 content: crate::types::MessageContent::Text(
-                    "Answer with a JSON object holding a single \"answer\" field."
-                        .to_string(),
+                    "Answer with a JSON object holding a single \"answer\" field.".to_string(),
                 ),
             }],
             &config,
