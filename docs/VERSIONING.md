@@ -3,10 +3,11 @@
 This repo (`bastion-core`) is a Cargo workspace with two tiers of crate,
 each with a different versioning contract. Both are pre-1.0 today; this
 document says what "pre-1.0" is allowed to mean here, and what changes once
-a crate crosses 1.0. A third tier — the **App** — is the product version of
-`bastion-agent`, which
-consumes these crates as a dependency; it is bumped on releases, not on API
-shape, and is out of scope for this document.
+a crate crosses 1.0.
+
+Two numbers sit ON TOP of the crate versions and were, until §7, decided ad
+hoc release by release: the git tag on this repo, and the product version of
+`bastion-agent`. §7 writes both rules down.
 
 ## The two tiers
 
@@ -136,3 +137,71 @@ scripts/dump-public-api.sh`) and reviewed against this list before the
 change landed; `public-api-baseline` CI passed on the additive diff (new
 `SharedFallbackModels` type, new `with_compaction_provider` fn — no
 removal, no rename, no visibility change).
+
+## 7. Repo tags and the product version
+
+§1-§6 govern the version inside each crate's `Cargo.toml`. They say nothing
+about the two numbers a human actually reads: `git tag` on this repo, and
+`bastion-agent`'s own version. Those were decided per release with no written
+criterion — including `v0.2.0`, `v0.3.0` and `bastion-agent` 0.2.4 — so the
+next person had to reconstruct the intent from the diff. This section removes
+that.
+
+### 7.1 This repo's tag is DERIVED, never judged
+
+A `bastion-core` tag is a label for "which set of crate versions is this",
+and it follows mechanically from the crates in the release:
+
+| What happened to the crates in this release | Repo tag |
+|---|---|
+| Any crate's **minor** advanced (a breaking change, per §1) | **minor** bump on the tag |
+| Only **patch** advances (additive APIs, fixes) | **patch** bump on the tag |
+| No crate version changed at all (docs, CI, tests only) | **no tag** — do not cut a release |
+
+Consequences, stated so they are not re-litigated:
+
+- The tag carries no independent opinion about how "big" a release feels. A
+  release with one breaking rename is a minor bump; a release with three
+  large additive subsystems is a patch bump. Size is what the CHANGELOG is
+  for.
+- Worked example, the release this section was written for: the provider-auth
+  contracts, the credential lifecycle and the catalog/conformance suite are
+  all additive (`bastion-types` 0.2.1 → 0.2.2, `bastion-runtime` 0.2.2 →
+  0.2.3, no minor advance anywhere), so the tag is **`v0.3.1`** — not
+  `v0.4.0`, even though three subsystems landed.
+- Worked example, `v0.3.0`: `TurnKernel::run_tool_loop` gained a parameter and
+  `bastion-types`/`bastion-runtime`/`bastion-personas` advanced their minor,
+  so the repo tag advanced its minor too.
+
+### 7.2 `bastion-agent`'s version is NOT derived
+
+The product version answers a different question — "what does an operator get,
+and what must they do to upgrade" — so it is a judgment call, made against
+this list rather than by feel:
+
+- **minor** when upgrading is not transparent: a config key must be added or
+  changed, state migrates, a surface is exposed that was not exposed before,
+  or a default behavior changes.
+- **patch** when upgrading is transparent: features that are opt-in and
+  default-off, fixes, docs, and advancing the pinned `bastion-core` commit
+  without a behavior change for an existing deployment.
+
+`bastion-agent` 0.2.4 is a worked example of the patch side: it added two
+network surfaces (extension UI, remote credential issuance) and both are
+default-off behind explicit config, so an existing deployment upgrading gets
+byte-identical behavior. New surface alone does not make a minor — surface
+that turns itself on does.
+
+Every `bastion-agent` release names the `bastion-core` commit it pins in its
+CHANGELOG entry, so a product version is always traceable to a crate set.
+
+### 7.3 Mechanics for both repos
+
+- Tags are **annotated** (`git tag -a`), never lightweight.
+- The tag goes on the merge commit in `main`, after CI is green — not on the
+  release branch tip.
+- The CHANGELOG section for that version must exist in the commit being
+  tagged. A tag pointing at a commit whose CHANGELOG still says `Unreleased`
+  is the defect this rule exists to prevent.
+- `Cargo.lock` is regenerated with cargo, not hand-edited, so a pin change is
+  validated by resolution rather than by eye.
