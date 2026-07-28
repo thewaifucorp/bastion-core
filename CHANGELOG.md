@@ -7,6 +7,8 @@ version).
 
 ## Unreleased
 
+## 0.3.1 — 2026-07-28
+
 ### Added
 
 - Provider catalog, usage and support descriptors
