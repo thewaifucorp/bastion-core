@@ -541,7 +541,9 @@ mod tests {
     #[test]
     fn capabilities_are_declared_per_model() {
         let catalog = catalog(0);
-        let full = catalog.select_model("gpt-5", &[ModelCapability::Usage], 0).unwrap();
+        let full = catalog
+            .select_model("gpt-5", &[ModelCapability::Usage], 0)
+            .unwrap();
         assert!(full.supports(ModelCapability::Usage));
 
         let err = catalog
@@ -725,8 +727,12 @@ mod tests {
 
     #[test]
     fn staleness_is_reported_against_an_explicit_budget() {
-        let snapshot =
-            ProviderUsageSnapshot::unknown("openai", "default", UsageSource::LocalAccounting, 1_000);
+        let snapshot = ProviderUsageSnapshot::unknown(
+            "openai",
+            "default",
+            UsageSource::LocalAccounting,
+            1_000,
+        );
         assert!(!snapshot.is_stale_at(1_500, 1_000));
         assert!(snapshot.is_stale_at(2_500, 1_000));
     }

@@ -48,10 +48,14 @@ pub enum CheckOutcome {
     Passed,
     /// Declared and not observed. `detail` is the suite's own description, never
     /// a raw provider payload — a conformance report is shareable.
-    Failed { detail: String },
+    Failed {
+        detail: String,
+    },
     /// Declared, but the kernel's `Provider` surface cannot observe it. Blocks
     /// promotion rather than passing quietly.
-    Unverifiable { reason: &'static str },
+    Unverifiable {
+        reason: &'static str,
+    },
     /// Not declared, so not exercised.
     NotDeclared,
 }
@@ -146,9 +150,10 @@ pub async fn run_conformance(
         .complete_simple(&format!("Repeat exactly: {ECHO_CANARY}"))
         .await
     {
-        Ok(text) if text.contains(ECHO_CANARY) => {
-            checks.push(ConformanceCheck::passed("text_completion_echoes_prompt", None))
-        }
+        Ok(text) if text.contains(ECHO_CANARY) => checks.push(ConformanceCheck::passed(
+            "text_completion_echoes_prompt",
+            None,
+        )),
         Ok(_) => checks.push(ConformanceCheck::failed(
             "text_completion_echoes_prompt",
             None,
@@ -271,7 +276,7 @@ async fn check_tools(
         .complete(
             &[crate::types::Message {
                 role: crate::types::Role::User,
-                content: "Call conformance_probe with ok=true.".to_string(),
+                content: crate::types::MessageContent::Text("Call conformance_probe with ok=true.".to_string()),
             }],
             &config,
         )
@@ -346,7 +351,7 @@ async fn check_structured_output(
         .complete(
             &[crate::types::Message {
                 role: crate::types::Role::User,
-                content: "Answer with a JSON object holding a single \"answer\" field.".to_string(),
+                content: crate::types::MessageContent::Text("Answer with a JSON object holding a single \"answer\" field.".to_string()),
             }],
             &config,
         )
@@ -392,7 +397,7 @@ async fn check_usage(
         .complete(
             &[crate::types::Message {
                 role: crate::types::Role::User,
-                content: "Say hello.".to_string(),
+                content: crate::types::MessageContent::Text("Say hello.".to_string()),
             }],
             &CallConfig::default(),
         )
@@ -561,8 +566,14 @@ mod tests {
     async fn declaring_nothing_exercises_nothing_but_still_checks_the_baseline() {
         let report = run_conformance(&FakeProvider::default(), &descriptor(&[])).await;
         assert!(report.promotion_ready());
-        assert_eq!(outcome(&report, "tool_call_is_returned_when_forced"), &CheckOutcome::NotDeclared);
-        assert_eq!(outcome(&report, "usage_is_reported"), &CheckOutcome::NotDeclared);
+        assert_eq!(
+            outcome(&report, "tool_call_is_returned_when_forced"),
+            &CheckOutcome::NotDeclared
+        );
+        assert_eq!(
+            outcome(&report, "usage_is_reported"),
+            &CheckOutcome::NotDeclared
+        );
         assert_eq!(
             outcome(&report, "text_completion_echoes_prompt"),
             &CheckOutcome::Passed
@@ -611,7 +622,10 @@ mod tests {
             run_conformance(&provider, &descriptor(&[ModelCapability::StructuredOutput])).await;
         match outcome(&report, "structured_output_returns_parseable_json") {
             CheckOutcome::Failed { detail } => {
-                assert!(detail.contains("supports_json_schema() == false"), "{detail}")
+                assert!(
+                    detail.contains("supports_json_schema() == false"),
+                    "{detail}"
+                )
             }
             other => panic!("expected a failure, got {other:?}"),
         }
@@ -676,7 +690,10 @@ mod tests {
         let report = run_conformance(&provider, &descriptor(&[])).await;
         match outcome(&report, "model_name_matches_catalog") {
             CheckOutcome::Failed { detail } => {
-                assert!(detail.contains("fake-1") && detail.contains("actually-fake-2"), "{detail}")
+                assert!(
+                    detail.contains("fake-1") && detail.contains("actually-fake-2"),
+                    "{detail}"
+                )
             }
             other => panic!("expected a failure, got {other:?}"),
         }
