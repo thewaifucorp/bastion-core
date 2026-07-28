@@ -9,6 +9,41 @@ version).
 
 ### Added
 
+- Streaming and cancellation on the kernel `Provider` trait
+  (`bastion-runtime::provider`), closing the last two capabilities
+  `provider_conformance` reported as permanently `Unverifiable`:
+  - `Provider::stream` — an incremental completion (`StreamChunk`: text
+    delta, tool-call-argument delta, final usage), returned as a boxed
+    `Stream` to keep `Provider` dyn-compatible (`&dyn Provider` is how
+    `provider_conformance`/callers already use it).
+  - `Provider::complete_cancellable` — a cancellable variant of `complete`,
+    taking a `tokio_util::sync::CancellationToken` so a caller can abort an
+    in-flight call and have the provider tear down the actual upstream
+    connection, not just stop waiting locally.
+  - Both are NEW trait methods with default implementations — every
+    existing `impl Provider` (6 real connectors in `bastion-providers`, 18
+    test mocks across `bastion-runtime`/`bastion-cognition`/
+    `bastion-personas`/examples) keeps compiling unchanged. The defaults are
+    honest typed errors (`ProviderNotStreamable`, `ProviderCancelled`),
+    never a fake single-chunk stream or a no-op "cancel" — a provider that
+    has not overridden them has not earned
+    `ModelCapability::Streaming`/`Cancellation`.
+  - `provider_conformance::run_conformance` now exercises both for real:
+    `check_streaming` requires 2+ observed chunks (one chunk is
+    indistinguishable from `complete()` wrapped in a stream of one);
+    `check_cancellation` races cancellation against an in-flight call
+    (`tokio::join!`, concurrent — not a sequential await-then-cancel) so a
+    provider that only checks the token up front, like the trait's own
+    default, cannot pass by accident.
+  - Additive, not breaking, per `docs/VERSIONING.md` §1/§3: both new trait
+    methods carry defaults, so no existing `impl Provider` changes — the
+    baseline diff (`docs/api-baseline/bastion-runtime.txt`: adds
+    `StreamChunk`, `ProviderCancelled`, `ProviderNotStreamable`) is three new
+    items appearing, nothing removed/renamed/resignatured. `bastion-runtime`
+    advances to `0.2.4` (additive).
+  - `bastion-runtime` gains a new dependency, `tokio-util` (for
+    `CancellationToken`).
+
 - Provider catalog, usage and support descriptors
   (`bastion-types::provider_catalog`) plus the shared conformance suite
   (`bastion-runtime::provider_conformance`) — the gate every subscription
