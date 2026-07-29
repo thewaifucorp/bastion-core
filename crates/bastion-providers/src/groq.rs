@@ -34,12 +34,20 @@ impl GroqProvider {
         if api_key.trim().is_empty() {
             panic!("GROQ_API_KEY required (missing or empty) — get one at https://console.groq.com/keys");
         }
+        Self::with_api_key(model, api_key)
+    }
+
+    /// Build directly from an already-resolved credential, bypassing
+    /// `std::env` for the secret — the host-injected-secret path
+    /// (`registry::resolve_provider_with_credential`). The base URL is still
+    /// env-configurable here since it isn't secret material.
+    pub fn with_api_key(model: &str, api_key: impl Into<String>) -> Self {
         let base = std::env::var("GROQ_BASE_URL")
             .unwrap_or_else(|_| "https://api.groq.com/openai/v1".to_owned());
 
         Self {
             http: reqwest::Client::new(),
-            api_key,
+            api_key: api_key.into(),
             base,
             model: model.to_owned(),
         }
