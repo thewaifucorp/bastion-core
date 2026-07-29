@@ -1,4 +1,5 @@
 fn anthropic.rs:new
+fn anthropic.rs:with_api_key
 const codex.rs:CODEX_PROVIDER_ID
 struct codex.rs:CodexConfig
 struct codex.rs:CodexProvider

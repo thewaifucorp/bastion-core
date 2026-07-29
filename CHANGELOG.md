@@ -38,10 +38,9 @@ version).
     constructs providers from an env var with no credential injection point,
     which is the wrong shape for a subscription connector. Wiring belongs to
     the login/connect service (bastion-agent, same epic, next milestone).
-
-## 0.3.1 — 2026-07-28
-
-### Added
+  - Additive, per `docs/VERSIONING.md` §1: a new module only, nothing
+    existing changed shape. `bastion-providers` advances to `0.2.2` (on top
+    of `0.2.1`'s `with_api_key` addition below).
 
 - Streaming and cancellation on the kernel `Provider` trait
   (`bastion-runtime::provider`), closing the last two capabilities
@@ -77,6 +76,33 @@ version).
     advances to `0.2.4` (additive).
   - `bastion-runtime` gains a new dependency, `tokio-util` (for
     `CancellationToken`).
+
+- Provider constructors now accept an already-resolved credential instead of
+  only reading `std::env` (`bastion-providers::registry::
+  resolve_provider_with_credential`), closing a debt `bastion-agent#16`
+  disclosed: the agent's `model_config` approve flow had to publish a
+  `BASTION_SECRETS_DIR`-only secret into the process environment via
+  `std::env::set_var` because there was no injection point.
+  - Every keyed provider (Anthropic/OpenAI/Gemini/Groq/OpenRouter) gains a
+    `with_api_key(model, api_key)` constructor alongside its existing `new
+    (model)`; `new` is now just `with_api_key` plus its own env lookup, so
+    the two paths cannot drift. Ollama takes no credential (nothing to
+    inject) and is unaffected.
+  - `resolve_provider(model)` is unchanged — it's now a one-line wrapper
+    around `resolve_provider_with_credential(model, None)`, so every
+    existing caller keeps its exact old behavior (including the env-var
+    panics on a missing key) without touching this function.
+  - Additive per `docs/VERSIONING.md` §1/§3: no existing signature changed,
+    only new items added (6 new `pub fn`s across `bastion-providers`).
+    `bastion-providers` advances to `0.2.1`.
+  - Agent-side follow-up (removing the `std::env::set_var` bridge in
+    `bastion-agent`'s `proposals.rs::resolve_provider_secret`) is deliberately
+    NOT part of this change — it needs `bastion-agent` repinned to a
+    `bastion-providers` release that includes this constructor first.
+
+## 0.3.1 — 2026-07-28
+
+### Added
 
 - Provider catalog, usage and support descriptors
   (`bastion-types::provider_catalog`) plus the shared conformance suite
