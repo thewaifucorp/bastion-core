@@ -7,6 +7,8 @@ version).
 
 ## Unreleased
 
+## 0.3.2 — 2026-07-29
+
 ### Added
 
 - `bastion-providers::codex` (BPCDX-01..05) — the Codex/ChatGPT subscription
