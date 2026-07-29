@@ -9,6 +9,39 @@ version).
 
 ### Added
 
+- `bastion-providers::codex` (BPCDX-01..05) — the Codex/ChatGPT subscription
+  connector, the first implementor of `ProviderCredentialRefresher`
+  (`bastion-runtime`, PR #7) and the first consumer of `provider_catalog`
+  (`bastion-types`, PR #8) outside their own test suites:
+  - `CodexRefresher` exchanges/refreshes tokens against the device-code and
+    `refresh_token` grants OpenAI's own official `openai/codex` CLI uses
+    (`codex-rs/login/src/{server.rs,device_code_auth.rs}`), cross-checked
+    against three independent third-party implementations. `revoke` is a
+    documented no-op — no vendor revocation endpoint was found anywhere in
+    that sourcing, and the trait's own contract makes that the correct
+    behavior (local state still moves to `Revoked`).
+  - `CodexProvider` speaks the Responses API against
+    `chatgpt.com/backend-api/codex/responses`, confirmed via
+    `simonw/llm-openai-via-codex`'s actual working source rather than the
+    Notion card's unverified claim alone.
+  - Returned via `support_descriptor()` at `SupportStatus::Experimental`
+    (BPCDX-05) — promotion to `Supported` needs a conformance run, a live
+    E2E run, a secret-scrub pass and a terms/licence review, none of which
+    have happened yet.
+  - Two details could not be sourced to the same standard as everything
+    else and are documented at their point of use instead of guessed: the
+    device flow's final-exchange `redirect_uri` (confirmed only for the
+    browser PKCE flow) and the device-login `verification_uri`'s literal
+    origin (template confirmed, origin not). Both are `CodexConfig` fields,
+    overridable without a code change.
+  - Not yet wired into `registry::resolve_provider` — that resolver
+    constructs providers from an env var with no credential injection point,
+    which is the wrong shape for a subscription connector. Wiring belongs to
+    the login/connect service (bastion-agent, same epic, next milestone).
+  - Additive, per `docs/VERSIONING.md` §1: a new module only, nothing
+    existing changed shape. `bastion-providers` advances to `0.2.2` (on top
+    of `0.2.1`'s `with_api_key` addition below).
+
 - Streaming and cancellation on the kernel `Provider` trait
   (`bastion-runtime::provider`), closing the last two capabilities
   `provider_conformance` reported as permanently `Unverifiable`:

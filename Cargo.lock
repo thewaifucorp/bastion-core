@@ -396,11 +396,12 @@ dependencies = [
 
 [[package]]
 name = "bastion-providers"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "async-openai",
  "async-trait",
+ "base64 0.22.1",
  "bastion-runtime",
  "bastion-types",
  "futures-util",

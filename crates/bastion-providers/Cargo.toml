@@ -1,6 +1,6 @@
 [package]
 name    = "bastion-providers"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 
 [lints.rust]
@@ -16,8 +16,12 @@ bastion-types   = { path = "../bastion-types" }
 bastion-runtime = { path = "../bastion-runtime" }
 tokio           = { version = "1", features = ["full"] }
 async-openai    = { version = "0.38", features = ["chat-completion"] }
-reqwest         = { version = "0.13", features = ["json", "stream"] }
+reqwest         = { version = "0.13", features = ["json", "stream", "form"] }
 async-trait     = "0.1"
+# codex.rs decodes the id_token JWT's base64url payload to read the
+# chatgpt_account_id claim — same version already used workspace-wide
+# (crates/bastion-mesh/Cargo.toml).
+base64          = "0.22"
 futures-util    = "0.3"
 anyhow          = "1"
 serde_json      = "1"
