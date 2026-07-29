@@ -33,7 +33,15 @@ impl GeminiProvider {
         if api_key.trim().is_empty() {
             panic!("GEMINI_API_KEY required (missing or empty) — get one at https://aistudio.google.com/apikey");
         }
+        Self::with_api_key(model, api_key)
+    }
 
+    /// Build directly from an already-resolved credential, bypassing
+    /// `std::env` for the secret — the host-injected-secret path
+    /// (`registry::resolve_provider_with_credential`). The base URL is still
+    /// env-configurable here since it isn't secret material.
+    pub fn with_api_key(model: &str, api_key: impl Into<String>) -> Self {
+        let api_key = api_key.into();
         let base = std::env::var("GEMINI_BASE_URL").unwrap_or_else(|_| {
             "https://generativelanguage.googleapis.com/v1beta/openai".to_owned()
         });

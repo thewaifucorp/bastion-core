@@ -38,7 +38,15 @@ pub(crate) struct AnthropicProvider {
 impl AnthropicProvider {
     pub fn new(model: &str) -> Self {
         let api_key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY required");
+        Self::with_api_key(model, api_key)
+    }
 
+    /// Build directly from an already-resolved credential, bypassing
+    /// `std::env` entirely — the host-injected-secret path
+    /// (`registry::resolve_provider_with_credential`). `new()` above is now
+    /// just this plus its own env lookup, so the two constructors can never
+    /// drift on client setup.
+    pub fn with_api_key(model: &str, api_key: impl Into<String>) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(120))
             .build()
@@ -46,7 +54,7 @@ impl AnthropicProvider {
 
         Self {
             client,
-            api_key,
+            api_key: api_key.into(),
             model: model.to_owned(),
         }
     }
