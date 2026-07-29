@@ -24,8 +24,10 @@ fn codex.rs:token_url
 fn codex.rs:with_config
 fn codex.rs:with_credential
 fn gemini.rs:new
+fn gemini.rs:with_api_key
 struct groq.rs:GroqProvider
 fn groq.rs:new
+fn groq.rs:with_api_key
 use lib.rs:*
 use lib.rs:Provider
 use lib.rs:SharedProvider
@@ -42,9 +44,12 @@ mod lib.rs:registry
 mod lib.rs:types
 fn ollama.rs:new
 fn openai.rs:new
+fn openai.rs:with_api_key
 struct openrouter.rs:OpenRouterProvider
 fn openrouter.rs:new
+fn openrouter.rs:with_api_key
 struct registry.rs:RegistryProviderResolver
 fn registry.rs:resolve_provider
 fn registry.rs:resolve_provider_kind
+fn registry.rs:resolve_provider_with_credential
 fn registry.rs:resolve_reflector_provider

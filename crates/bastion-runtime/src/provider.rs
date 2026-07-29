@@ -5,9 +5,56 @@
 //! the concrete providers and their OpenAI-compat translation helpers stayed
 //! there (they become `bastion-providers` in M2 step 4).
 
-use crate::types::{CallConfig, LlmResponse, Message, ToolChoice};
+use crate::types::{CallConfig, LlmResponse, Message, TokenUsage, ToolChoice};
+use futures_util::stream::Stream;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
+
+/// One incremental piece of a streamed completion (streaming/cancellation
+/// task). Mirrors the shape a caller needs to reassemble a response
+/// progressively: partial text, partial tool-call arguments (providers may
+/// stream tool-call JSON in fragments the same way they stream text), and a
+/// final usage report once the provider's own stream is otherwise done.
+///
+/// There is deliberately no `Done` variant — the stream's own end (the
+/// `Stream` yielding `None`) is that signal. A separate `Done` chunk would
+/// let a provider send it early and still look finished to a caller that
+/// only checks for that variant, instead of the stream actually closing.
+#[derive(Debug, Clone)]
+pub enum StreamChunk {
+    /// Incremental assistant text.
+    TextDelta(String),
+    /// Incremental tool-call arguments for the call at `index` — `id`/`name`
+    /// are only present on the fragment that starts a given call.
+    ToolCallDelta {
+        index: usize,
+        id: Option<String>,
+        name: Option<String>,
+        arguments_delta: String,
+    },
+    /// Final usage, once known. Not every provider can report usage
+    /// mid-stream, so this may be the last item before the stream ends.
+    Usage(TokenUsage),
+}
+
+/// A call was cancelled before or during its provider round-trip
+/// (streaming/cancellation task). Distinguishable from a generic transport
+/// error so callers — and the conformance suite — can tell "cancelled as
+/// requested" apart from "failed on its own".
+#[derive(Debug, thiserror::Error)]
+#[error("provider call cancelled")]
+pub struct ProviderCancelled;
+
+/// The default, honest answer for a provider that has not implemented
+/// streaming (streaming/cancellation task). Never fabricate streaming by
+/// chunking a whole response after the fact — that would let a connector
+/// declare `ModelCapability::Streaming` and pass conformance without any
+/// real streaming behind it.
+#[derive(Debug, thiserror::Error)]
+#[error("provider does not support streaming")]
+pub struct ProviderNotStreamable;
 
 #[async_trait::async_trait]
 pub trait Provider: Send + Sync {
@@ -38,6 +85,54 @@ pub trait Provider: Send + Sync {
     /// 08-03's forced-tool-call helper.
     fn supports_json_schema(&self) -> bool {
         true
+    }
+
+    /// Stream a completion incrementally instead of waiting for the whole
+    /// response (streaming/cancellation task). `cancel` lets a caller abort
+    /// the underlying upstream connection mid-stream, not just stop reading
+    /// from it locally.
+    ///
+    /// New trait method WITH a default so none of this crate's/`bastion-
+    /// providers`'/every test mock's existing `impl Provider` need to
+    /// change to keep compiling — only a provider that genuinely streams
+    /// from its own upstream overrides this. The default is a typed error,
+    /// never a fake single-chunk stream: a provider that has not overridden
+    /// this has not earned `ModelCapability::Streaming`, and the
+    /// conformance suite (`provider_conformance.rs`) now calls this for
+    /// real instead of treating the capability as unverifiable.
+    async fn stream(
+        &self,
+        _messages: &[Message],
+        _config: &CallConfig,
+        _cancel: CancellationToken,
+    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = anyhow::Result<StreamChunk>> + Send>>> {
+        Err(ProviderNotStreamable.into())
+    }
+
+    /// A cancellable variant of [`Provider::complete`] (streaming/
+    /// cancellation task). `cancel` firing while the call is still in
+    /// flight must abort the actual upstream connection — "aborted
+    /// upstream, not merely dropped locally" is exactly what
+    /// `ModelCapability::Cancellation` claims, and the conformance suite
+    /// races cancellation against an in-flight call to catch a provider
+    /// that only checks `cancel` up front and then ignores it.
+    ///
+    /// New trait method WITH a default, same reasoning as [`Provider::
+    /// stream`]: the default can only refuse to START an already-cancelled
+    /// call — it has no way to interrupt `complete()` once that call has
+    /// begun, so it must never be treated as proof of real cancellation.
+    /// Only a provider that overrides this to race its own upstream I/O
+    /// against `cancel` earns `ModelCapability::Cancellation`.
+    async fn complete_cancellable(
+        &self,
+        messages: &[Message],
+        config: &CallConfig,
+        cancel: CancellationToken,
+    ) -> anyhow::Result<LlmResponse> {
+        if cancel.is_cancelled() {
+            return Err(ProviderCancelled.into());
+        }
+        self.complete(messages, config).await
     }
 }
 

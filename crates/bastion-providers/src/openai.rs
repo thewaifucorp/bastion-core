@@ -22,13 +22,18 @@ pub(crate) struct OpenAIProvider {
 
 impl OpenAIProvider {
     pub fn new(model: &str) -> Self {
-        // OPENAI_API_KEY is read automatically by OpenAIConfig::default().
-        // Panic with a clear message if it's missing.
-        if std::env::var("OPENAI_API_KEY").is_err() {
-            panic!("OPENAI_API_KEY required");
-        }
+        let api_key =
+            std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| panic!("OPENAI_API_KEY required"));
+        Self::with_api_key(model, api_key)
+    }
+
+    /// Build directly from an already-resolved credential, bypassing
+    /// `std::env` entirely — the host-injected-secret path
+    /// (`registry::resolve_provider_with_credential`).
+    pub fn with_api_key(model: &str, api_key: impl Into<String>) -> Self {
+        let config = OpenAIConfig::default().with_api_key(api_key.into());
         Self {
-            client: Client::new(),
+            client: Client::with_config(config),
             model: model.to_owned(),
         }
     }
