@@ -157,7 +157,10 @@ use memory.rs:PendingCorrection
 use memory.rs:PrivacyTier
 type memory.rs:SharedMemory
 trait provider.rs:Provider
+struct provider.rs:ProviderCancelled
+struct provider.rs:ProviderNotStreamable
 type provider.rs:SharedProvider
+enum provider.rs:StreamChunk
 fn provider.rs:call_with_retry
 fn provider.rs:complete_structured_via_forced_tool_call
 trait provider_auth.rs:BackoffPolicy

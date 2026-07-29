@@ -11,28 +11,40 @@ version).
 
 ### Added
 
-- Provider constructors now accept an already-resolved credential instead of
-  only reading `std::env` (`bastion-providers::registry::
-  resolve_provider_with_credential`), closing a debt `bastion-agent#16`
-  disclosed: the agent's `model_config` approve flow had to publish a
-  `BASTION_SECRETS_DIR`-only secret into the process environment via
-  `std::env::set_var` because there was no injection point.
-  - Every keyed provider (Anthropic/OpenAI/Gemini/Groq/OpenRouter) gains a
-    `with_api_key(model, api_key)` constructor alongside its existing `new
-    (model)`; `new` is now just `with_api_key` plus its own env lookup, so
-    the two paths cannot drift. Ollama takes no credential (nothing to
-    inject) and is unaffected.
-  - `resolve_provider(model)` is unchanged — it's now a one-line wrapper
-    around `resolve_provider_with_credential(model, None)`, so every
-    existing caller keeps its exact old behavior (including the env-var
-    panics on a missing key) without touching this function.
-  - Additive per `docs/VERSIONING.md` §1/§3: no existing signature changed,
-    only new items added (6 new `pub fn`s across `bastion-providers`).
-    `bastion-providers` advances to `0.2.1`.
-  - Agent-side follow-up (removing the `std::env::set_var` bridge in
-    `bastion-agent`'s `proposals.rs::resolve_provider_secret`) is deliberately
-    NOT part of this change — it needs `bastion-agent` repinned to a
-    `bastion-providers` release that includes this constructor first.
+- Streaming and cancellation on the kernel `Provider` trait
+  (`bastion-runtime::provider`), closing the last two capabilities
+  `provider_conformance` reported as permanently `Unverifiable`:
+  - `Provider::stream` — an incremental completion (`StreamChunk`: text
+    delta, tool-call-argument delta, final usage), returned as a boxed
+    `Stream` to keep `Provider` dyn-compatible (`&dyn Provider` is how
+    `provider_conformance`/callers already use it).
+  - `Provider::complete_cancellable` — a cancellable variant of `complete`,
+    taking a `tokio_util::sync::CancellationToken` so a caller can abort an
+    in-flight call and have the provider tear down the actual upstream
+    connection, not just stop waiting locally.
+  - Both are NEW trait methods with default implementations — every
+    existing `impl Provider` (6 real connectors in `bastion-providers`, 18
+    test mocks across `bastion-runtime`/`bastion-cognition`/
+    `bastion-personas`/examples) keeps compiling unchanged. The defaults are
+    honest typed errors (`ProviderNotStreamable`, `ProviderCancelled`),
+    never a fake single-chunk stream or a no-op "cancel" — a provider that
+    has not overridden them has not earned
+    `ModelCapability::Streaming`/`Cancellation`.
+  - `provider_conformance::run_conformance` now exercises both for real:
+    `check_streaming` requires 2+ observed chunks (one chunk is
+    indistinguishable from `complete()` wrapped in a stream of one);
+    `check_cancellation` races cancellation against an in-flight call
+    (`tokio::join!`, concurrent — not a sequential await-then-cancel) so a
+    provider that only checks the token up front, like the trait's own
+    default, cannot pass by accident.
+  - Additive, not breaking, per `docs/VERSIONING.md` §1/§3: both new trait
+    methods carry defaults, so no existing `impl Provider` changes — the
+    baseline diff (`docs/api-baseline/bastion-runtime.txt`: adds
+    `StreamChunk`, `ProviderCancelled`, `ProviderNotStreamable`) is three new
+    items appearing, nothing removed/renamed/resignatured. `bastion-runtime`
+    advances to `0.2.4` (additive).
+  - `bastion-runtime` gains a new dependency, `tokio-util` (for
+    `CancellationToken`).
 
 - Provider catalog, usage and support descriptors
   (`bastion-types::provider_catalog`) plus the shared conformance suite

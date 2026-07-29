@@ -18,14 +18,18 @@
 //! - [`CheckOutcome::Unverifiable`] — it was declared and this suite has no way
 //!   to observe it through the kernel's [`Provider`] surface.
 //!
-//! `Unverifiable` is deliberately NOT a pass. `Provider` exposes `complete`,
-//! `complete_simple`, `context_limit`, `model_name`, `name` and
-//! `supports_json_schema` — there is no streaming method and no cancellation
-//! token, so a connector declaring `Streaming` or `Cancellation` is making a
-//! claim nothing here can check. Reporting that as a pass would let the
-//! promotion gate certify an unverified capability, which is precisely the
-//! failure mode the gate exists for. [`ConformanceReport::promotion_ready`] is
-//! therefore false while any check is `Unverifiable`.
+//! `Unverifiable` is deliberately NOT a pass — it is what this suite reports
+//! for a declared capability it has no way to observe through the kernel
+//! `Provider` surface. `Provider::stream`/`Provider::complete_cancellable`
+//! (added by the streaming/cancellation task) closed the last two capabilities
+//! that used to be permanently `Unverifiable`: `Streaming` and `Cancellation`
+//! are now real `Passed`/`Failed` checks like every other capability, so
+//! `Unverifiable` should not appear in a report today unless a future
+//! capability is added to the catalog ahead of a kernel surface to observe
+//! it. Reporting an unobservable claim as a pass would let the promotion gate
+//! certify an unverified capability, which is precisely the failure mode the
+//! gate exists for. [`ConformanceReport::promotion_ready`] is therefore false
+//! while any check is `Unverifiable`.
 //!
 //! ## No live credentials required
 //!
@@ -35,8 +39,11 @@
 //! distinct: `conformance_passed` and `live_e2e_passed` are separate evidence).
 
 use bastion_types::provider_catalog::{ModelCapability, ProviderModelDescriptor};
+use futures_util::StreamExt;
 use serde::Serialize;
 use serde_json::json;
+use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
 use crate::provider::Provider;
 use crate::types::{CallConfig, ToolChoice};
@@ -199,20 +206,8 @@ pub async fn run_conformance(
     checks.push(check_tools(provider, descriptor).await);
     checks.push(check_structured_output(provider, descriptor).await);
     checks.push(check_usage(provider, descriptor).await);
-    checks.push(unverifiable_or_not_declared(
-        descriptor,
-        ModelCapability::Streaming,
-        "streaming",
-        "the kernel Provider trait exposes no streaming method, so a streaming \
-         claim cannot be observed through it",
-    ));
-    checks.push(unverifiable_or_not_declared(
-        descriptor,
-        ModelCapability::Cancellation,
-        "cancellation",
-        "the kernel Provider trait exposes no cancellation token, so an \
-         upstream-abort claim cannot be observed through it",
-    ));
+    checks.push(check_streaming(provider, descriptor).await);
+    checks.push(check_cancellation(provider, descriptor).await);
 
     ConformanceReport {
         provider_name: provider.name().to_string(),
@@ -221,26 +216,113 @@ pub async fn run_conformance(
     }
 }
 
-/// For capabilities the kernel surface cannot reach: `NotDeclared` when the
-/// connector is honest about not having it, `Unverifiable` when it claims it.
-fn unverifiable_or_not_declared(
+/// Declared streaming must deliver real incremental chunks, not a whole
+/// response wearing a stream-shaped API. Two or more chunks is the bar: one
+/// chunk is indistinguishable from `complete()` wrapped in a stream of one.
+async fn check_streaming(
+    provider: &dyn Provider,
     descriptor: &ProviderModelDescriptor,
-    capability: ModelCapability,
-    name: &'static str,
-    reason: &'static str,
 ) -> ConformanceCheck {
-    if descriptor.supports(capability) {
-        ConformanceCheck {
-            capability: Some(capability),
-            name,
-            outcome: CheckOutcome::Unverifiable { reason },
-        }
-    } else {
-        ConformanceCheck {
-            capability: Some(capability),
+    let name = "streaming_delivers_incremental_chunks";
+    if !descriptor.supports(ModelCapability::Streaming) {
+        return ConformanceCheck {
+            capability: Some(ModelCapability::Streaming),
             name,
             outcome: CheckOutcome::NotDeclared,
+        };
+    }
+
+    let messages = [crate::types::Message {
+        role: crate::types::Role::User,
+        content: crate::types::MessageContent::Text("Say hello.".to_string()),
+    }];
+
+    let mut stream = match provider
+        .stream(&messages, &CallConfig::default(), CancellationToken::new())
+        .await
+    {
+        Ok(stream) => stream,
+        Err(e) => {
+            return ConformanceCheck::failed(
+                name,
+                Some(ModelCapability::Streaming),
+                format!("streaming is declared but stream() returned an error: {e}"),
+            )
         }
+    };
+
+    let mut chunk_count = 0usize;
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(_) => chunk_count += 1,
+            Err(e) => {
+                return ConformanceCheck::failed(
+                    name,
+                    Some(ModelCapability::Streaming),
+                    format!("the stream errored mid-flight: {e}"),
+                )
+            }
+        }
+    }
+
+    if chunk_count >= 2 {
+        ConformanceCheck::passed(name, Some(ModelCapability::Streaming))
+    } else {
+        ConformanceCheck::failed(
+            name,
+            Some(ModelCapability::Streaming),
+            format!(
+                "streaming is declared but the stream yielded {chunk_count} chunk(s) — \
+                 indistinguishable from a single non-streamed response wearing a \
+                 stream-shaped API"
+            ),
+        )
+    }
+}
+
+/// Declared cancellation must abort an in-flight call, not merely refuse to
+/// start an already-cancelled one. `cancel.cancel()` fires concurrently with
+/// the call itself (`tokio::join!`, not a sequential await-then-cancel) so a
+/// provider that only checks `cancel.is_cancelled()` up front — like
+/// [`Provider::complete_cancellable`]'s own default — cannot pass by
+/// accident: it has to actually observe the signal mid-flight and tear the
+/// call down.
+async fn check_cancellation(
+    provider: &dyn Provider,
+    descriptor: &ProviderModelDescriptor,
+) -> ConformanceCheck {
+    let name = "cancellation_aborts_an_in_flight_call";
+    if !descriptor.supports(ModelCapability::Cancellation) {
+        return ConformanceCheck {
+            capability: Some(ModelCapability::Cancellation),
+            name,
+            outcome: CheckOutcome::NotDeclared,
+        };
+    }
+
+    let messages = [crate::types::Message {
+        role: crate::types::Role::User,
+        content: crate::types::MessageContent::Text("Say hello.".to_string()),
+    }];
+    let token = CancellationToken::new();
+    let config = CallConfig::default();
+
+    let call = provider.complete_cancellable(&messages, &config, token.clone());
+    let cancel_after_a_beat = async {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        token.cancel();
+    };
+    let (result, ()) = tokio::join!(call, cancel_after_a_beat);
+
+    match result {
+        Ok(_) => ConformanceCheck::failed(
+            name,
+            Some(ModelCapability::Cancellation),
+            "cancellation is declared, but a call cancelled while in flight still \
+             completed successfully — this suite cannot tell that apart from \
+             cancellation being ignored",
+        ),
+        Err(_) => ConformanceCheck::passed(name, Some(ModelCapability::Cancellation)),
     }
 }
 
@@ -434,10 +516,13 @@ async fn check_usage(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::{ProviderCancelled, ProviderNotStreamable, StreamChunk};
     use crate::types::{LlmResponse, Message, TokenUsage, ToolCall};
     use bastion_types::provider_catalog::{
         ProviderAuthFlow, ProviderSupportDescriptor, SupportEvidence,
     };
+    use futures_util::stream::Stream;
+    use std::pin::Pin;
 
     /// A provider whose behavior is dialed in per test — the point being that
     /// the suite needs no credentials to be meaningful.
@@ -450,6 +535,10 @@ mod tests {
         json_text: Option<&'static str>,
         usage: TokenUsage,
         fail: bool,
+        /// `Some(chunks)` makes `stream()` yield exactly these chunks; `None`
+        /// leaves `stream()` at the trait default (typed "not streamable"
+        /// error) — the honest behavior for a provider that never overrode it.
+        stream_chunks: Option<Vec<StreamChunk>>,
     }
 
     impl Default for FakeProvider {
@@ -469,6 +558,7 @@ mod tests {
                     actual_cost_usd: None,
                 },
                 fail: false,
+                stream_chunks: None,
             }
         }
     }
@@ -533,6 +623,31 @@ mod tests {
         fn supports_json_schema(&self) -> bool {
             self.json_schema
         }
+
+        async fn stream(
+            &self,
+            _messages: &[Message],
+            _config: &CallConfig,
+            _cancel: CancellationToken,
+        ) -> anyhow::Result<Pin<Box<dyn Stream<Item = anyhow::Result<StreamChunk>> + Send>>>
+        {
+            match &self.stream_chunks {
+                Some(chunks) => {
+                    let chunks = chunks.clone();
+                    Ok(Box::pin(futures_util::stream::iter(
+                        chunks.into_iter().map(Ok),
+                    )))
+                }
+                None => Err(ProviderNotStreamable.into()),
+            }
+        }
+
+        // `complete_cancellable` deliberately NOT overridden here — the trait
+        // default (refuse only an already-cancelled call, otherwise forward to
+        // `complete()`) is exactly the dishonest-by-omission behavior the
+        // `..._without_implementing_it_fails` test below proves the
+        // conformance suite catches. `CancellableFakeProvider` further down
+        // is the one that overrides it for real.
     }
 
     fn descriptor(capabilities: &[ModelCapability]) -> ProviderModelDescriptor {
@@ -733,29 +848,208 @@ mod tests {
         assert!(!report.promotion_ready());
     }
 
-    /// The honest limit of this suite: `Streaming` and `Cancellation` have no
-    /// observable surface on the kernel's `Provider`, so declaring them yields
-    /// `Unverifiable` — which BLOCKS promotion instead of passing quietly.
+    /// `Streaming`/`Cancellation` declared without overriding `stream()`/
+    /// `complete_cancellable()` now FAIL — not `Unverifiable` — because the
+    /// kernel `Provider` surface can observe them for real since the
+    /// streaming/cancellation task. The trait defaults are honest typed
+    /// errors/no-ops, never a fake pass, so a connector that never
+    /// implemented either correctly fails both checks and cannot promote.
     #[tokio::test]
-    async fn declaring_streaming_or_cancellation_is_unverifiable_and_blocks_promotion() {
+    async fn declaring_streaming_or_cancellation_without_implementing_them_fails() {
         let report = run_conformance(
             &FakeProvider::default(),
             &descriptor(&[ModelCapability::Streaming, ModelCapability::Cancellation]),
         )
         .await;
-        assert!(report.failures().is_empty(), "these are not failures");
-        assert_eq!(report.unverifiable().len(), 2);
         assert!(
-            !report.promotion_ready(),
-            "a capability nobody could check is not a capability anybody verified"
+            report.unverifiable().is_empty(),
+            "nothing should be unverifiable anymore"
         );
-        for check in report.unverifiable() {
-            match &check.outcome {
-                CheckOutcome::Unverifiable { reason } => {
-                    assert!(reason.contains("Provider trait"), "{reason}")
-                }
-                other => panic!("expected unverifiable, got {other:?}"),
+        assert_eq!(report.failures().len(), 2, "{:?}", report.failures());
+        assert!(!report.promotion_ready());
+        match outcome(&report, "streaming_delivers_incremental_chunks") {
+            CheckOutcome::Failed { detail } => {
+                assert!(detail.contains("returned an error"), "{detail}")
             }
+            other => panic!("expected a failure, got {other:?}"),
+        }
+        match outcome(&report, "cancellation_aborts_an_in_flight_call") {
+            CheckOutcome::Failed { detail } => {
+                assert!(detail.contains("completed successfully"), "{detail}")
+            }
+            other => panic!("expected a failure, got {other:?}"),
+        }
+    }
+
+    /// A provider that genuinely streams 2+ chunks passes — and the chunks
+    /// (checked here directly against `stream()`, not just through the
+    /// suite) prove the order/assembly a real caller would rely on.
+    #[tokio::test]
+    async fn a_provider_that_streams_multiple_chunks_passes() {
+        let provider = FakeProvider {
+            stream_chunks: Some(vec![
+                StreamChunk::TextDelta("hel".into()),
+                StreamChunk::TextDelta("lo".into()),
+                StreamChunk::Usage(TokenUsage {
+                    input_tokens: 3,
+                    output_tokens: 2,
+                    cache_read: 0,
+                    cache_write: 0,
+                    actual_cost_usd: None,
+                }),
+            ]),
+            ..Default::default()
+        };
+
+        let mut stream = provider
+            .stream(&[], &CallConfig::default(), CancellationToken::new())
+            .await
+            .unwrap();
+        let mut assembled = String::new();
+        let mut count = 0;
+        while let Some(chunk) = stream.next().await {
+            if let StreamChunk::TextDelta(delta) = chunk.unwrap() {
+                assembled.push_str(&delta);
+            }
+            count += 1;
+        }
+        assert_eq!(assembled, "hello");
+        assert_eq!(count, 3);
+
+        let report = run_conformance(&provider, &descriptor(&[ModelCapability::Streaming])).await;
+        assert!(report.promotion_ready(), "{:?}", report.failures());
+        assert_eq!(
+            outcome(&report, "streaming_delivers_incremental_chunks"),
+            &CheckOutcome::Passed
+        );
+    }
+
+    /// A single chunk is indistinguishable from `complete()` wrapped in a
+    /// stream of one — the suite requires 2+ to call it real streaming.
+    #[tokio::test]
+    async fn a_provider_that_streams_only_one_chunk_fails() {
+        let provider = FakeProvider {
+            stream_chunks: Some(vec![StreamChunk::TextDelta("only one".into())]),
+            ..Default::default()
+        };
+        let report = run_conformance(&provider, &descriptor(&[ModelCapability::Streaming])).await;
+        assert!(!report.promotion_ready());
+        match outcome(&report, "streaming_delivers_incremental_chunks") {
+            CheckOutcome::Failed { detail } => assert!(detail.contains("1 chunk"), "{detail}"),
+            other => panic!("expected a failure, got {other:?}"),
+        }
+    }
+
+    /// A provider whose `complete_cancellable` override races its own
+    /// upstream work against `cancel` for real — the counterpart to
+    /// `FakeProvider`'s intentionally-not-overridden default, used to prove
+    /// the conformance check accepts a provider that actually does the work.
+    struct CancellableFakeProvider {
+        /// When `true`, `cancel` firing mid-flight aborts the call (a real
+        /// implementation). When `false`, cancellation is accepted as a
+        /// parameter but ignored — the call completes anyway, exactly the
+        /// lie `ModelCapability::Cancellation` must not get away with.
+        respects_cancel: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for CancellableFakeProvider {
+        async fn complete(
+            &self,
+            _messages: &[Message],
+            _config: &CallConfig,
+        ) -> anyhow::Result<LlmResponse> {
+            // Simulated upstream latency — long enough that the conformance
+            // check's 20ms cancel timer reliably fires WHILE this is still
+            // in flight, so the race is real rather than resolved before
+            // cancellation ever gets a chance to matter.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            Ok(LlmResponse {
+                text: "ok".to_string(),
+                tool_calls: None,
+                usage: TokenUsage::default(),
+            })
+        }
+
+        async fn complete_simple(&self, prompt: &str) -> anyhow::Result<String> {
+            Ok(prompt.to_string())
+        }
+
+        fn context_limit(&self) -> usize {
+            8_192
+        }
+
+        fn model_name(&self) -> &str {
+            "cancellable-fake"
+        }
+
+        fn name(&self) -> &'static str {
+            "fake"
+        }
+
+        async fn complete_cancellable(
+            &self,
+            messages: &[Message],
+            config: &CallConfig,
+            cancel: CancellationToken,
+        ) -> anyhow::Result<LlmResponse> {
+            if self.respects_cancel {
+                tokio::select! {
+                    resp = self.complete(messages, config) => resp,
+                    _ = cancel.cancelled() => Err(ProviderCancelled.into()),
+                }
+            } else {
+                // Deliberately dishonest: accepts `cancel` but never checks
+                // it — the call always runs to completion regardless (relies
+                // on `complete()`'s own simulated latency to make sure the
+                // conformance check's cancel fires while this is in flight).
+                self.complete(messages, config).await
+            }
+        }
+    }
+
+    fn cancellable_descriptor(capabilities: &[ModelCapability]) -> ProviderModelDescriptor {
+        ProviderModelDescriptor::new("cancellable-fake", 0)
+            .with_capabilities(capabilities.iter().copied())
+    }
+
+    #[tokio::test]
+    async fn a_provider_that_really_aborts_on_cancel_passes() {
+        let provider = CancellableFakeProvider {
+            respects_cancel: true,
+        };
+        let report = run_conformance(
+            &provider,
+            &cancellable_descriptor(&[ModelCapability::Cancellation]),
+        )
+        .await;
+        assert!(report.promotion_ready(), "{:?}", report.failures());
+        assert_eq!(
+            outcome(&report, "cancellation_aborts_an_in_flight_call"),
+            &CheckOutcome::Passed
+        );
+    }
+
+    /// The check races cancellation against the in-flight call (`tokio::
+    /// join!`, concurrent) rather than awaiting the call first — a provider
+    /// that accepts `cancel` but never actually observes it must still fail,
+    /// even though it "handles" the parameter syntactically.
+    #[tokio::test]
+    async fn a_provider_that_ignores_cancel_mid_flight_fails() {
+        let provider = CancellableFakeProvider {
+            respects_cancel: false,
+        };
+        let report = run_conformance(
+            &provider,
+            &cancellable_descriptor(&[ModelCapability::Cancellation]),
+        )
+        .await;
+        assert!(!report.promotion_ready());
+        match outcome(&report, "cancellation_aborts_an_in_flight_call") {
+            CheckOutcome::Failed { detail } => {
+                assert!(detail.contains("completed successfully"), "{detail}")
+            }
+            other => panic!("expected a failure, got {other:?}"),
         }
     }
 
