@@ -123,9 +123,12 @@ of them gate a Kernel 1.0 tag; each crate is free to take these up on its
 own 0.x schedule):
 
 - Model hint on `SessionSpec`/`TaskInput` for `pursue_task` routing
-  (`bastion-agent/src/routing.rs`, `bastion-agent-runtime` crate).
-- Per-mode provider override on the Cabinet orchestrator
-  (`bastion-agent/src/routing.rs`, `bastion-personas` crate).
+  (`bastion-agent/src/routing.rs`, `bastion-agent-runtime` crate) — see the
+  separate `feat/pursue-task-model-hint` branch/PR.
+- ~~Per-mode provider override on the Cabinet orchestrator~~ — **done,
+  2026-07-30**: `bastion-personas` 0.2.0 → 0.2.1
+  (`PersonaResponder::with_cabinet_provider`), see `CHANGELOG.md`'s
+  Unreleased section.
 - Routing provider construction through the daemon's `SecretResolver` so
   secrets-dir-only keys work in `/proposal approve`'s `model_config`
   handler (`bastion-agent/src/proposals.rs`) — this one isn't a kernel seam

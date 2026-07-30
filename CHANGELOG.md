@@ -7,6 +7,22 @@ version).
 
 ## Unreleased
 
+### Added
+
+- `bastion-personas` 0.2.0 → 0.2.1 (CAB-01..04) — `PersonaResponder` gains
+  `with_cabinet_provider(SharedProvider) -> Self`, a per-mode provider
+  override for the Cabinet's legs (`orchestrator::deliberate`) and its
+  synthesis/egress-gate call, distinct from the turn's conversational
+  `provider`. Both the egress check and `synthesize` resolve through one
+  new private method (`effective_cabinet_provider`) so they can never
+  observe different providers. `None` (the default) is byte-identical to
+  pre-seam behavior — Cabinet uses the live turn provider, same as before.
+  Closes the last of the three items `docs/VERSIONING.md` §6 recorded as
+  "consciously deferred" on 2026-07-25. 3 new tests (offline, mock
+  providers) prove the resolution rule; wiring `routing.rules`'s `cabinet`
+  class to actually construct this override in `bastion-agent`'s
+  composition root is a separate, stacked PR.
+
 ## 0.3.2 — 2026-07-29
 
 ### Added
