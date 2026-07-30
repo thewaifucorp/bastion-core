@@ -1,6 +1,6 @@
 [package]
 name    = "bastion-providers"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 
 [lints.rust]
@@ -26,6 +26,16 @@ futures-util    = "0.3"
 anyhow          = "1"
 serde_json      = "1"
 tracing         = "0.1"
+github-copilot-sdk = "1.0.8"
+# PKCE pair generation for copilot.rs's authorization-code flow — version
+# matches the existing workspace-wide pin (crates/bastion-mcp/Cargo.toml).
+rand            = "0.8"
+# Same crate/version bastion-runtime, bastion-mesh, bastion-agent-runtime and
+# bastion-extension-protocol already pin; copilot.rs uses it for the PKCE
+# S256 code_challenge. copilot.rs builds the authorize URL with
+# `reqwest::Url` (reqwest re-exports `url::Url`) rather than adding a
+# separate `url` dependency.
+sha2            = "0.10"
 
 [dev-dependencies]
 # Test-only (ollama.rs's GBNF-diagnostic test builds a schemars schema for
