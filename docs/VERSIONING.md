@@ -117,15 +117,16 @@ regenerated `docs/api-baseline/bastion-runtime.txt`):
   pre-seam behavior (`bastion-agent/src/routing.rs`'s `TODO(core seam)` for
   a dedicated compaction provider).
 
-**Consciously deferred** (all three touch Extension-tier crates —
-`bastion-agent-runtime`/`bastion-personas` — not `bastion-runtime`, so none
-of them gate a Kernel 1.0 tag; each crate is free to take these up on its
-own 0.x schedule):
+**Consciously deferred, taken up later on their own 0.x schedule** (all
+touch Extension-tier crates — `bastion-agent-runtime`/`bastion-personas` —
+not `bastion-runtime`, so none of them gated a Kernel 1.0 tag):
 
-- Model hint on `SessionSpec`/`TaskInput` for `pursue_task` routing
-  (`bastion-agent/src/routing.rs`, `bastion-agent-runtime` crate).
+- ~~Model hint on `SessionSpec`/`TaskInput` for `pursue_task` routing~~ —
+  **done, 2026-07-30**: `bastion-agent-runtime` 0.1.0 → 0.1.1, see
+  `CHANGELOG.md`'s Unreleased section.
 - Per-mode provider override on the Cabinet orchestrator
-  (`bastion-agent/src/routing.rs`, `bastion-personas` crate).
+  (`bastion-agent/src/routing.rs`, `bastion-personas` crate) — in progress,
+  2026-07-30.
 - Routing provider construction through the daemon's `SecretResolver` so
   secrets-dir-only keys work in `/proposal approve`'s `model_config`
   handler (`bastion-agent/src/proposals.rs`) — this one isn't a kernel seam

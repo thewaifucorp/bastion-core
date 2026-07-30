@@ -7,6 +7,22 @@ version).
 
 ## Unreleased
 
+### Added
+
+- `bastion-agent-runtime` 0.1.0 → 0.1.1 (SEAM-01/02) — `SessionSpec` and
+  `TaskInput` each gain an optional `model_hint: Option<String>` field,
+  `#[serde(default)]` for wire compatibility with payloads serialized before
+  this field existed. `None` (every existing construction site across the
+  workspace) is byte-identical to prior behavior — each `AgentRuntime`
+  adapter decides what to do with a `Some` value (apply it, or ignore it
+  with a `RuntimeEvent::Warning`), never a hard error, since not every
+  harness protocol exposes model selection. No `docs/api-baseline/` diff:
+  the baseline tool tracks item names/visibility, not struct fields (see
+  `docs/VERSIONING.md` §2). Closes one of the three items
+  `docs/VERSIONING.md` §6 recorded as "consciously deferred" on 2026-07-25 —
+  `bastion-agent`'s `RuntimeTaskExecutor::execute` populating this field for
+  `pursue_task` routing is the follow-up PR.
+
 ## 0.3.2 — 2026-07-29
 
 ### Added
