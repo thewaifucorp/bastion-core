@@ -9,19 +9,53 @@ version).
 
 ### Added
 
-- `bastion-personas` 0.2.0 → 0.2.1 (CAB-01..04) — `PersonaResponder` gains
-  `with_cabinet_provider(SharedProvider) -> Self`, a per-mode provider
-  override for the Cabinet's legs (`orchestrator::deliberate`) and its
-  synthesis/egress-gate call, distinct from the turn's conversational
-  `provider`. Both the egress check and `synthesize` resolve through one
-  new private method (`effective_cabinet_provider`) so they can never
-  observe different providers. `None` (the default) is byte-identical to
-  pre-seam behavior — Cabinet uses the live turn provider, same as before.
-  Closes the last of the three items `docs/VERSIONING.md` §6 recorded as
-  "consciously deferred" on 2026-07-25. 3 new tests (offline, mock
-  providers) prove the resolution rule; wiring `routing.rules`'s `cabinet`
-  class to actually construct this override in `bastion-agent`'s
-  composition root is a separate, stacked PR.
+- `bastion-providers::copilot` (BPCOP-01..05) — the GitHub Copilot
+  subscription connector, second implementor of `ProviderCredentialRefresher`
+  after `codex` (BPCDX, `0.3.2` above), but structurally different from every
+  other connector in this crate:
+  - GitHub Copilot has **no direct HTTP inference API for third parties** —
+    the official `github/copilot-sdk` communicates with the `copilot` CLI
+    server over JSON-RPC only, and the old Copilot Extensions HTTP surface
+    was fully sunset 2025-11-10. `CopilotProvider` wraps the official Rust
+    `github-copilot-sdk` crate (v1.0.8, GA), which spawns/manages the CLI as
+    a subprocess over stdio, instead of opening an HTTP connection like
+    every other `Provider` impl here.
+  - `Transport::Stdio` (not `Tcp` — an unauthenticated loopback port in a
+    multi-owner daemon; not `InProcess` — FFI, experimental, one crash takes
+    the whole daemon down), `ClientMode::Empty` +
+    `SessionConfig::with_available_tools([])` +
+    `SessionConfig::deny_all_permissions()` (the closest documented
+    approximation of "just answer, never act" this SDK offers — not a
+    wire-level guarantee, so the resulting turn is trusted no more than any
+    other provider's).
+  - One `Client` + one `Session` per `CopilotProvider` instance — verified
+    against the real crate source (not docs.rs summaries, which proved
+    internally inconsistent this round) that `ClientOptions.github_token`
+    and `.mode` are client-level, not per-session, so a shared pool would
+    gain nothing here; matches how `SubscriptionModelProvider::build` is
+    already called once per `/model` switch.
+  - Auth: classic GitHub OAuth App, authorization-code + PKCE
+    (`ProviderAuthFlow::AuthorizationCodePkce`) — `gho_` tokens don't expire
+    and carry no `refresh_token`, so `CopilotRefresher::refresh` is a
+    load-and-return, never an HTTP call (unlike Codex). `revoke` calls
+    GitHub's real `DELETE /applications/{client_id}/grant` (unlike Codex's
+    documented no-op — GitHub does publish a revocation endpoint).
+  - Two things could not be sourced to the same standard and are documented
+    at their point of use instead of guessed: whether a `gho_` token needs
+    an explicit OAuth `scope` to carry Copilot entitlement (undocumented;
+    defaults to none), and whether GitHub's classic OAuth App token endpoint
+    actually validates the PKCE `code_verifier` it never documents accepting
+    (sent anyway, on the assumption an unrecognized parameter is ignored,
+    not rejected).
+  - Returned via `support_descriptor()` at `SupportStatus::Experimental`
+    (BPCOP-05) — promotion to `Supported` additionally needs a live test
+    against a real account confirming the tool-suppression config actually
+    prevents the Copilot agent from acting on its own, since that is not
+    guaranteed by the SDK's documentation.
+  - Not yet wired into `registry::resolve_provider` or bastion-agent's
+    connector layer — same follow-up boundary as `codex`'s own entry above.
+  - Additive, per `docs/VERSIONING.md` §1: a new module only.
+    `bastion-providers` advances to `0.2.3`.
 
 ## 0.3.2 — 2026-07-29
 
