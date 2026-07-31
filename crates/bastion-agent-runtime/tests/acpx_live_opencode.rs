@@ -102,6 +102,7 @@ fn make_spec(workspace_root: std::path::PathBuf) -> SessionSpec {
         env: EnvPolicy { allow },
         mcp_bridge: None,
         otel: OtelContext::default(),
+        model_hint: None,
     }
 }
 
@@ -111,22 +112,26 @@ fn make_scenarios() -> ConformanceScenarios {
             prompt: "Reply with exactly: ok".to_string(),
             attachments: Vec::new(),
             expected: TaskExpectation::Conversation,
+            model_hint: None,
         },
         never_terminates: TaskInput {
             prompt: "Count slowly from 1 to 1000000, one number per line, in words, no code."
                 .to_string(),
             attachments: Vec::new(),
             expected: TaskExpectation::Conversation,
+            model_hint: None,
         },
         requests_permission: TaskInput {
             prompt: "create file permission_probe.txt with content probe".to_string(),
             attachments: Vec::new(),
             expected: TaskExpectation::CodeChange,
+            model_hint: None,
         },
         produces_artifact: TaskInput {
             prompt: "create file hello.txt with content hi".to_string(),
             attachments: Vec::new(),
             expected: TaskExpectation::CodeChange,
+            model_hint: None,
         },
         // Same rationale as the claude live suite (A-05 §5.1): a live
         // cloud-backed harness makes 14 genuine cold `start()` calls in one
