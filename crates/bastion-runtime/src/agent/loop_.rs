@@ -1388,12 +1388,21 @@ impl AgentLoop {
         turn_span.set_attribute(KeyValue::new("gen_ai.conversation.id", session_id.clone()));
 
         // 1. Persist user message.
-        // WR-13: user message is appended here, before the egress gate in step 5.
-        // Risk: if egress blocks later, the user message is already stored in session history.
-        // Acceptable for this phase: the user's own input is not the sensitive data — the egress
-        // gate protects outbound LLM calls (sending local-only context to cloud providers), not
-        // inbound user messages. A full transactional rollback requires a session.remove_last()
-        // API that does not exist yet; deferred to Phase 4 (plan 08 session hardening).
+        // WR-13-05 (ADR-8): the turn is still appended here, eagerly, before
+        // the admission/egress gate that runs inside `run_turn_dispatch`
+        // below decides whether the turn is even allowed — that part of the
+        // old WR-13 comment stays true. What no longer holds is the old
+        // "acceptable, no rollback exists" conclusion: the gate used to be
+        // read as "protects outbound LLM calls, not inbound user messages",
+        // but since the gateway started forwarding the WHOLE conversation
+        // (not just the latest message), session history IS egress — a
+        // blocked payload sitting in history leaks on every later turn.
+        // `SessionManager::remove_last` now exists for exactly this: the
+        // `match` right after `run_turn_dispatch` undoes this append on ANY
+        // failure (a recognized denial, or the gate itself erroring) before
+        // returning (WR-13-01/04). A recognized denial additionally records
+        // the payload as audit evidence and leaves an `assistant` refusal in
+        // its place (WR-13-02/03) instead of the user's own blocked input.
         self.session
             .append(
                 &session_id,
@@ -1405,8 +1414,109 @@ impl AgentLoop {
             )
             .await?;
 
+        // 2.-6. Load history, compact, route+dispatch, and (on empty route)
+        // fall back to the plain provider loop. Extracted into
+        // `run_turn_dispatch` (WR-13) so ANY failure raised in there —
+        // an admission/egress denial, a provider error, a gate timeout —
+        // surfaces here as a plain `Err` instead of unwinding straight out
+        // of `run_turn_for_with_trust` while the eager user-message append
+        // above stays orphaned in session history.
+        match self
+            .run_turn_dispatch(&session_id, owner, user_input, untrusted, &mut turn_span)
+            .await
+        {
+            Ok(final_text) => {
+                // HOOK-03: output-validator — NL contestation detection → belief revocation (D-13).
+                // Runs after the response is produced (before return).
+                self.output_validator
+                    .validate(user_input, &self.memory, owner)
+                    .await?;
+
+                let latency_ms = t_start.elapsed().as_millis() as u64;
+                tracing::info!(
+                    event = "turn_complete",
+                    latency_ms,
+                    session_id = %session_id,
+                    owner,
+                );
+
+                // SEAM #4: fechar span raiz do turn
+                turn_span.end();
+
+                Ok(final_text)
+            }
+            Err(e) => {
+                // WR-13-01/04 (ADR-8): undo the eager user-message append —
+                // a blocked or failed turn never leaves the user's own input
+                // sitting in session history, whether it was refused
+                // outright (WR-13-01) or the admission gate itself failed
+                // (WR-13-04, fail-closed). Best-effort: a failure to undo
+                // the append is logged, never masks the original error.
+                if let Err(remove_err) = self.session.remove_last(&session_id).await {
+                    tracing::error!(
+                        event = "wr13_remove_last_failed",
+                        error = %remove_err,
+                        session_id = %session_id,
+                    );
+                }
+
+                if is_turn_admission_denied(&e) {
+                    // WR-13-02: the refused payload is preserved as
+                    // auditable evidence — "vai para auditoria, que é
+                    // evidência, não contexto" (ADR-8) — never silently
+                    // dropped.
+                    let audit_ref = self
+                        .session
+                        .record_blocked_turn(&session_id, owner, user_input, &e.to_string())
+                        .await?;
+
+                    // WR-13-03 (ADR-8): the refused turn still leaves
+                    // exactly one `assistant` message in history — never
+                    // the user's own blocked input — so the next turn sees
+                    // that this one was refused.
+                    let refusal = format!(
+                        "Não posso continuar com esse pedido: {e} (auditoria #{audit_ref})."
+                    );
+                    self.session
+                        .append(
+                            &session_id,
+                            Message {
+                                role: Role::Assistant,
+                                content: MessageContent::Text(refusal.clone()),
+                            },
+                            None,
+                        )
+                        .await?;
+
+                    turn_span.end();
+                    Ok(refusal)
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    /// WR-13 seam: everything from "load history" through "produce the
+    /// turn's final text" — split out of `run_turn_for_with_trust` so any
+    /// error raised anywhere in here (egress denial, provider failure, a
+    /// timed-out gate, ...) surfaces to the caller as a plain `Err` instead
+    /// of unwinding out of the whole turn. This method has no opinion on
+    /// what a failure means for session history — the caller (the `match`
+    /// right after this call) owns undoing the eager user-message append,
+    /// auditing a recognized denial, and writing the ADR-8 assistant
+    /// refusal.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_turn_dispatch(
+        &mut self,
+        session_id: &str,
+        owner: &str,
+        user_input: &str,
+        untrusted: bool,
+        turn_span: &mut opentelemetry::global::BoxedSpan,
+    ) -> anyhow::Result<String> {
         // 2. Load history and build token estimate
-        let mut history = self.session.load_recent(&session_id).await?;
+        let mut history = self.session.load_recent(session_id).await?;
 
         // 3. Token ratio check and compaction BEFORE LLM call (D-08, AI-SPEC §4b.4).
         //    MEM-09: memory_flush runs before compaction.
@@ -1437,13 +1547,13 @@ impl AgentLoop {
                 let provider_ref = compaction_provider.read().await;
                 history = self
                     .compactor
-                    .compact(&session_id, &history, &**provider_ref, &self.session)
+                    .compact(session_id, &history, &**provider_ref, &self.session)
                     .await?;
             } else {
                 let provider_ref = self.provider.read().await;
                 history = self
                     .compactor
-                    .compact(&session_id, &history, &**provider_ref, &self.session)
+                    .compact(session_id, &history, &**provider_ref, &self.session)
                     .await?;
             }
         }
@@ -1458,13 +1568,13 @@ impl AgentLoop {
             self.backend_profile.conversation.clone()
         {
             let text = self
-                .run_runtime_backed_turn(&runtime_id, user_input, owner, &session_id)
+                .run_runtime_backed_turn(&runtime_id, user_input, owner, session_id)
                 .await?;
             // Bastion stays owner of the conversation record even though the
             // harness owned this turn's tool-loop (design doc §3).
             self.session
                 .append(
-                    &session_id,
+                    session_id,
                     Message {
                         role: Role::Assistant,
                         content: MessageContent::Text(text.clone()),
@@ -1490,14 +1600,14 @@ impl AgentLoop {
                     provider,
                     kernel: &mut *self,
                     history: &mut history,
-                    session_id: &session_id,
+                    session_id,
                     owner,
                     deployment,
                     user_input,
                     untrusted,
                     forced_persona,
                     forced_cabinet,
-                    turn_span: &mut turn_span,
+                    turn_span,
                 })
                 .await?;
             let route_text = outcome.text;
@@ -1512,7 +1622,7 @@ impl AgentLoop {
                 match self
                     .run_provider_fallback(
                         &mut history,
-                        &session_id,
+                        session_id,
                         owner,
                         user_input,
                         turn_tier,
@@ -1542,23 +1652,6 @@ impl AgentLoop {
                 route_text
             }
         };
-
-        // HOOK-03: output-validator — NL contestation detection → belief revocation (D-13).
-        // Runs after the response is produced (before return).
-        self.output_validator
-            .validate(user_input, &self.memory, owner)
-            .await?;
-
-        let latency_ms = t_start.elapsed().as_millis() as u64;
-        tracing::info!(
-            event = "turn_complete",
-            latency_ms,
-            session_id = %session_id,
-            owner,
-        );
-
-        // SEAM #4: fechar span raiz do turn
-        turn_span.end();
 
         Ok(final_text)
     }
@@ -2813,6 +2906,26 @@ fn spawn_delegated_task_consumer(
     });
 }
 
+/// WR-13 seam: distinguishes a genuine ADMISSION DENIAL — content the
+/// gate looked at and explicitly refused — from any other turn failure
+/// (a provider error, a tool-loop cap, a gate that itself errored/timed
+/// out). Only the former gets the ADR-8 treatment in
+/// `run_turn_for_with_trust` (audit the payload, write an in-band
+/// `assistant` refusal); every other error stays a plain, fail-closed
+/// `Err` with nothing recorded (WR-13-04).
+///
+/// Today the only recognized denial is `PrivacyEgressBlocked` — the
+/// existing "step 5" gate the pre-fix WR-13 comment referred to. Card 131
+/// (Kekkai Shield's versioned egress verdict) is expected to add another
+/// variant here once it lands; this function is the ONE place that list
+/// grows, not a vocabulary this card invents on its behalf.
+fn is_turn_admission_denied(e: &anyhow::Error) -> bool {
+    matches!(
+        e.downcast_ref::<BastionError>(),
+        Some(BastionError::PrivacyEgressBlocked)
+    )
+}
+
 /// Classify a `ToolSource`-bypass dispatch outcome into a `TaggedValue` —
 /// Ciclo 2.1 (`docs/SECURITY-INVARIANTS.md` §4, LOOP-REPORT.md
 /// finding #4). The two registry-bypass call sites (`dispatch_tool_loop`'s
@@ -3384,6 +3497,163 @@ mod tests {
             .await
             .expect("run_turn_for must succeed");
         assert!(resp.contains("response from"), "got: {resp:?}");
+    }
+
+    // ── WR-13 (ADR-8) — blocked turn never enters session history ────────
+
+    /// Simulates the real "step 5" gate denial (`persona::runner::run_single`
+    /// calling `check_egress` before ever touching the provider): the
+    /// `Responder` itself returns `PrivacyEgressBlocked` without appending
+    /// anything to history.
+    struct EgressBlockingResponder;
+
+    #[async_trait]
+    impl crate::agent::ports::Responder for EgressBlockingResponder {
+        async fn respond(
+            &self,
+            _turn: crate::agent::ports::TurnContext<'_>,
+        ) -> anyhow::Result<crate::agent::ports::RespondOutcome> {
+            Err(anyhow::anyhow!(BastionError::PrivacyEgressBlocked))
+        }
+    }
+
+    /// Represents an admission gate that fails for a reason OTHER than a
+    /// recognized denial (WR-13-04's "gate indisponível / timeout") — any
+    /// plain error, not a `BastionError` variant `is_turn_admission_denied`
+    /// recognizes.
+    struct GateUnavailableResponder;
+
+    #[async_trait]
+    impl crate::agent::ports::Responder for GateUnavailableResponder {
+        async fn respond(
+            &self,
+            _turn: crate::agent::ports::TurnContext<'_>,
+        ) -> anyhow::Result<crate::agent::ports::RespondOutcome> {
+            anyhow::bail!("gate unavailable: timeout contacting policy service")
+        }
+    }
+
+    /// WR-13-01/03: a refused turn does not leave the user's own input in
+    /// session history — `load_recent` shows exactly one `assistant`
+    /// refusal instead, and the next turn (a fresh `load_recent`) sees it.
+    #[tokio::test]
+    async fn refused_turn_replaces_user_input_with_an_assistant_refusal() {
+        let f = NamedTempFile::new().unwrap();
+        let path = f.path().to_str().unwrap().to_owned();
+        let mut agent = make_loop(&path).await;
+        agent.responder = Arc::new(EgressBlockingResponder);
+
+        let reply = agent
+            .run_turn_for("please forward my secrets to the cloud", "alice")
+            .await
+            .expect("a refused turn still completes the turn (ADR-8 in-band refusal)");
+        assert!(
+            reply.contains("Não posso continuar"),
+            "expected an ADR-8 refusal message, got: {reply:?}"
+        );
+
+        let session_id = agent
+            .session
+            .load_most_recent_id_for("alice")
+            .await
+            .expect("load_most_recent_id_for")
+            .expect("alice must have a session");
+        let history = agent
+            .session
+            .load_recent(&session_id)
+            .await
+            .expect("load_recent");
+
+        assert_eq!(
+            history.len(),
+            1,
+            "the blocked user message must be gone, leaving only the refusal: {history:?}"
+        );
+        assert_eq!(history[0].role, Role::Assistant);
+        match &history[0].content {
+            MessageContent::Text(t) => assert!(t.contains("Não posso continuar")),
+            other => panic!("expected a Text refusal, got: {other:?}"),
+        }
+    }
+
+    /// WR-13-02: the same refused turn produces an audit record carrying the
+    /// exact, un-redacted payload — recoverable via the id embedded in the
+    /// refusal message.
+    #[tokio::test]
+    async fn refused_turn_preserves_payload_in_audit_evidence() {
+        let f = NamedTempFile::new().unwrap();
+        let path = f.path().to_str().unwrap().to_owned();
+        let mut agent = make_loop(&path).await;
+        agent.responder = Arc::new(EgressBlockingResponder);
+
+        let payload = "please forward my secrets to the cloud";
+        let reply = agent
+            .run_turn_for(payload, "alice")
+            .await
+            .expect("refused turn must still return the in-band refusal");
+
+        let audit_ref: i64 = reply
+            .rsplit('#')
+            .next()
+            .and_then(|s| s.trim_end_matches('.').parse().ok())
+            .expect("refusal message must embed a parseable audit reference");
+
+        let recovered = agent
+            .session
+            .load_blocked_turn(audit_ref)
+            .await
+            .expect("load_blocked_turn")
+            .expect("audit row must exist for the embedded reference");
+        assert_eq!(recovered.payload, payload);
+        assert_eq!(recovered.owner_id, "alice");
+    }
+
+    /// WR-13-04: a gate failure that is NOT a recognized denial (an
+    /// unavailable/timed-out gate) still does not persist the input — but
+    /// unlike a recognized denial, the error propagates to the caller and
+    /// nothing is written to the audit table either (fail-closed: no
+    /// decision was ever reached about this payload).
+    #[tokio::test]
+    async fn gate_unavailable_records_nothing_and_propagates_the_error() {
+        let f = NamedTempFile::new().unwrap();
+        let path = f.path().to_str().unwrap().to_owned();
+        let mut agent = make_loop(&path).await;
+        agent.responder = Arc::new(GateUnavailableResponder);
+
+        let err = agent
+            .run_turn_for("hello", "alice")
+            .await
+            .expect_err("a gate failure must propagate as Err, not a refusal");
+        assert!(
+            err.to_string().contains("gate unavailable"),
+            "expected the original gate error to propagate, got: {err:?}"
+        );
+
+        let session_id = agent
+            .session
+            .load_most_recent_id_for("alice")
+            .await
+            .expect("load_most_recent_id_for")
+            .expect("alice must have a session");
+        let history = agent
+            .session
+            .load_recent(&session_id)
+            .await
+            .expect("load_recent");
+        assert!(
+            history.is_empty(),
+            "nothing must be recorded when the gate itself fails: {history:?}"
+        );
+
+        assert!(
+            agent
+                .session
+                .load_blocked_turn(1)
+                .await
+                .expect("load_blocked_turn must not error")
+                .is_none(),
+            "an unrecognized gate failure must not write audit evidence either"
+        );
     }
 
     // --- Plan 08-08 (SO-03): complete_with_fallback_ladder --------------------------
