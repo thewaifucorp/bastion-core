@@ -604,6 +604,7 @@ impl AgentLoop {
                 prompt,
                 attachments: Vec::new(),
                 expected: bastion_agent_runtime::TaskExpectation::Conversation,
+                model_hint: None,
             })
             .await
             .map_err(|e| anyhow::Error::new(BastionError::BackendUnavailable(e.to_string())))?;
@@ -765,6 +766,7 @@ impl AgentLoop {
                 prompt,
                 attachments: Vec::new(),
                 expected: bastion_agent_runtime::TaskExpectation::CodeChange,
+                model_hint: None,
             })
             .await
             .map_err(|e| anyhow::Error::new(BastionError::BackendUnavailable(e.to_string())))?;
@@ -882,6 +884,7 @@ impl AgentLoop {
                 prompt: followup_prompt,
                 attachments: Vec::new(),
                 expected: bastion_agent_runtime::TaskExpectation::CodeChange,
+                model_hint: None,
             })
             .await
             .map_err(|e| anyhow::Error::new(BastionError::BackendUnavailable(e.to_string())))?;
@@ -2453,6 +2456,7 @@ fn build_runtime_session_spec(
         env: env.clone(),
         mcp_bridge: None,
         otel: bastion_agent_runtime::OtelContext::default(),
+        model_hint: None,
     };
     (spec, timeout, permissions, env)
 }

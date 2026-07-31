@@ -24,6 +24,7 @@ mod persona/mod.rs:runner
 mod persona/mod.rs:soul
 struct persona/responder.rs:PersonaResponder
 fn persona/responder.rs:new
+fn persona/responder.rs:with_cabinet_provider
 use persona/router.rs:ConveneReason
 use persona/router.rs:ResponseMode
 use persona/router.rs:RouterDecision
