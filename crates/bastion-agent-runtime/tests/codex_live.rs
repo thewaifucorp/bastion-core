@@ -66,6 +66,7 @@ fn make_spec(
         env: EnvPolicy { allow: base_env() },
         mcp_bridge: None,
         otel: OtelContext::default(),
+        model_hint: None,
     }
 }
 
@@ -75,6 +76,7 @@ fn make_scenarios() -> ConformanceScenarios {
             prompt: "Reply with exactly: ok".to_string(),
             attachments: Vec::new(),
             expected: TaskExpectation::Conversation,
+            model_hint: None,
         },
         // A model can (and did, live) decide "count to 1,000,000" is
         // impractical and answer in a couple seconds instead of actually
@@ -85,16 +87,19 @@ fn make_scenarios() -> ConformanceScenarios {
             prompt: "Run the shell command `sleep 30 && echo done` and report the output. Do not summarize or skip it — actually run it and wait.".to_string(),
             attachments: Vec::new(),
             expected: TaskExpectation::Conversation,
+            model_hint: None,
         },
         requests_permission: TaskInput {
             prompt: "create file permission_probe.txt with content probe".to_string(),
             attachments: Vec::new(),
             expected: TaskExpectation::CodeChange,
+            model_hint: None,
         },
         produces_artifact: TaskInput {
             prompt: "create file hello.txt with content hi".to_string(),
             attachments: Vec::new(),
             expected: TaskExpectation::CodeChange,
+            model_hint: None,
         },
         // Ciclo 2.2 (A-05 §5.1): see acpx_live_claude.rs for the rationale —
         // 14 cold `start()` calls per `run_all` sweep against a real cloud
@@ -233,21 +238,25 @@ async fn codex_resume_smoke() {
             prompt: "Reply with exactly: ok".to_string(),
             attachments: Vec::new(),
             expected: TaskExpectation::Conversation,
+            model_hint: None,
         },
         never_terminates: TaskInput {
             prompt: "noop".to_string(),
             attachments: Vec::new(),
             expected: TaskExpectation::Conversation,
+            model_hint: None,
         },
         requests_permission: TaskInput {
             prompt: "noop".to_string(),
             attachments: Vec::new(),
             expected: TaskExpectation::Conversation,
+            model_hint: None,
         },
         produces_artifact: TaskInput {
             prompt: "noop".to_string(),
             attachments: Vec::new(),
             expected: TaskExpectation::Conversation,
+            model_hint: None,
         },
         watchdog: Duration::from_secs(30),
     };
@@ -274,6 +283,7 @@ async fn codex_resume_smoke() {
             prompt: "Reply with exactly: ok".to_string(),
             attachments: Vec::new(),
             expected: TaskExpectation::Conversation,
+            model_hint: None,
         })
         .await
         .expect("warm-up submit before resume");
@@ -314,6 +324,7 @@ async fn codex_resume_smoke() {
             prompt: "Reply with exactly: ok".to_string(),
             attachments: Vec::new(),
             expected: TaskExpectation::Conversation,
+            model_hint: None,
         })
         .await
         .expect("submit on resumed session");

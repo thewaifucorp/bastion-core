@@ -297,6 +297,17 @@ pub struct SessionSpec {
     pub env: EnvPolicy,
     pub mcp_bridge: Option<McpBridgeSpec>,
     pub otel: OtelContext,
+    /// SEAM-01: an optional hint at which model the harness should use for
+    /// this session, distinct from `runtime_id` (which harness/agent to
+    /// talk to at all). `None` (the default on every existing construction
+    /// site) means "let the harness pick" — byte-identical to pre-SEAM
+    /// behavior. Each `AgentRuntime` adapter decides what to do with a
+    /// `Some` value: apply it, or ignore it with a `RuntimeEvent::Warning`
+    /// (same "surface, never silently drop" discipline `ResumeSpec` already
+    /// documents above) — never a hard error, since not every harness
+    /// protocol exposes a model-selection knob.
+    #[serde(default)]
+    pub model_hint: Option<String>,
 }
 
 /// Expected shape of a task result; adapters use it to map harness output,
@@ -314,6 +325,12 @@ pub struct TaskInput {
     pub prompt: String,
     pub attachments: Vec<Artifact>,
     pub expected: TaskExpectation,
+    /// SEAM-02: same model hint as [`SessionSpec::model_hint`], carried at
+    /// the individual-submission level for a harness whose protocol only
+    /// exposes model choice per task submission rather than per session.
+    /// `None` = current behavior, unchanged.
+    #[serde(default)]
+    pub model_hint: Option<String>,
 }
 
 /// Kind of artifact produced by (or fed into) a harness session.
@@ -570,4 +587,40 @@ pub trait RuntimeSession: Send {
     ) -> Result<(), RuntimeError>;
 
     async fn status(&self) -> Result<SessionStatus, RuntimeError>;
+}
+
+#[cfg(test)]
+mod model_hint_tests {
+    use super::*;
+
+    /// SEAM-01/02: a `SessionSpec`/`TaskInput` JSON payload serialized
+    /// BEFORE this field existed (no `model_hint` key at all) must still
+    /// deserialize — `#[serde(default)]` reads the absence as `None`, never
+    /// a hard parse error. This is the wire-compatibility half of
+    /// "additive, non-breaking"; the compile-time half is proven by every
+    /// existing struct-literal call site across the workspace still
+    /// building unchanged.
+    #[test]
+    fn task_input_model_hint_defaults_to_none_when_absent_from_json() {
+        let legacy_json = serde_json::json!({
+            "prompt": "hello",
+            "attachments": [],
+            "expected": "Conversation",
+        });
+        let input: TaskInput = serde_json::from_value(legacy_json).unwrap();
+        assert_eq!(input.model_hint, None);
+    }
+
+    #[test]
+    fn task_input_model_hint_round_trips_when_present() {
+        let input = TaskInput {
+            prompt: "hello".to_string(),
+            attachments: Vec::new(),
+            expected: TaskExpectation::Conversation,
+            model_hint: Some("gpt-5".to_string()),
+        };
+        let json = serde_json::to_value(&input).unwrap();
+        let back: TaskInput = serde_json::from_value(json).unwrap();
+        assert_eq!(back.model_hint.as_deref(), Some("gpt-5"));
+    }
 }

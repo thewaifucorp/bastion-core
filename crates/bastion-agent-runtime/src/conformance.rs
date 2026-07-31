@@ -971,6 +971,7 @@ pub async fn check_protocol_garbage<R: AgentRuntime + FaultInjection>(
         prompt: "noop".to_string(),
         attachments: Vec::new(),
         expected: TaskExpectation::Conversation,
+        model_hint: None,
     };
     match session.submit(follow_up).await {
         Err(RuntimeError::Protocol(_)) => CheckResult::Pass,
