@@ -3595,7 +3595,11 @@ mod tests {
         let audit_ref: i64 = reply
             .rsplit('#')
             .next()
-            .and_then(|s| s.trim_end_matches(|c: char| c == '.' || c == ')').parse().ok())
+            .and_then(|s| {
+                s.trim_end_matches(|c: char| c == '.' || c == ')')
+                    .parse()
+                    .ok()
+            })
             .expect("refusal message must embed a parseable audit reference");
 
         let recovered = agent
