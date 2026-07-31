@@ -1,2 +1,2 @@
 pub mod sqlite;
-pub use sqlite::SessionManager;
+pub use sqlite::{BlockedTurn, SessionManager};

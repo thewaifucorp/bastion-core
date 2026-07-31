@@ -185,8 +185,10 @@ fn provider_conformance.rs:failures
 fn provider_conformance.rs:promotion_ready
 fn provider_conformance.rs:run_conformance
 fn provider_conformance.rs:unverifiable
+use session/mod.rs:BlockedTurn
 use session/mod.rs:SessionManager
 mod session/mod.rs:sqlite
+struct session/sqlite.rs:BlockedTurn
 struct session/sqlite.rs:SessionManager
 fn session/sqlite.rs:append
 fn session/sqlite.rs:check_budget
@@ -194,11 +196,14 @@ fn session/sqlite.rs:create_session
 fn session/sqlite.rs:create_session_for
 fn session/sqlite.rs:delete_runtime_handle
 fn session/sqlite.rs:init_schema
+fn session/sqlite.rs:load_blocked_turn
 fn session/sqlite.rs:load_most_recent_id
 fn session/sqlite.rs:load_most_recent_id_for
 fn session/sqlite.rs:load_recent
 fn session/sqlite.rs:load_runtime_handle
 fn session/sqlite.rs:new
+fn session/sqlite.rs:record_blocked_turn
+fn session/sqlite.rs:remove_last
 fn session/sqlite.rs:replace_with_summary
 fn session/sqlite.rs:save_runtime_handle
 fn session/sqlite.rs:update_budget

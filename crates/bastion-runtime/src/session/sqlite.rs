@@ -21,6 +21,22 @@ pub struct SessionManager {
     db_path: String,
 }
 
+/// One recovered audit-evidence row for a turn the admission/egress gate
+/// refused before it ever reached session history (WR-13-02, ADR-8). See
+/// [`SessionManager::record_blocked_turn`] / [`SessionManager::load_blocked_turn`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockedTurn {
+    pub session_id: String,
+    pub owner_id: String,
+    /// The raw, un-redacted user input that was refused — evidence, not
+    /// context (never replayed into the LLM's conversation history).
+    pub payload: String,
+    /// Human-readable reason the gate refused this turn (e.g. the
+    /// `Display` of the `BastionError` variant that triggered this record).
+    pub reason: String,
+    pub created_at: i64,
+}
+
 impl SessionManager {
     pub fn new(db_path: impl Into<String>) -> Self {
         Self {
@@ -190,6 +206,26 @@ impl SessionManager {
                 );
                 CREATE INDEX IF NOT EXISTS idx_permission_queue_owner_status
                     ON permission_queue(owner_id, status);
+
+                -- WR-13-02 (ADR-8): auditable evidence for a turn the
+                -- admission/egress gate refused before it ever reached
+                -- session history. `payload` is the RAW, un-redacted user
+                -- input — this table (never a `tracing::` call) is the ONE
+                -- place that payload is allowed to be written down, because
+                -- it is evidence, not context (ADR-8's own distinction).
+                -- `id` is the recoverable audit reference the caller
+                -- surfaces back to the owner (e.g. in the assistant
+                -- refusal message).
+                CREATE TABLE IF NOT EXISTS blocked_turns (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT    NOT NULL,
+                    owner_id   TEXT    NOT NULL,
+                    payload    TEXT    NOT NULL,
+                    reason     TEXT    NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_blocked_turns_session
+                    ON blocked_turns(session_id, created_at);
             ",
             )?;
             // Additive migration for pre-existing single-user DBs (idempotent —
@@ -387,6 +423,99 @@ impl SessionManager {
 
             Ok::<_, anyhow::Error>(())
         }).await?
+    }
+
+    /// WR-13-01/04 (ADR-8): undo the single most-recently-appended message
+    /// for `session_id`.
+    ///
+    /// Built to undo ONE specific write: `AgentLoop::run_turn_for_with_trust`
+    /// appends the user's turn eagerly, before the admission/egress gate
+    /// decides whether the turn is even allowed; when that gate later
+    /// fails (a denial, or the gate itself erroring), the caller undoes
+    /// that exact append with this method before deciding what — if
+    /// anything — replaces it in history. It deletes the row with the
+    /// highest `id` for this session (monotonic autoincrement, so this is
+    /// well-defined even for same-nanosecond writes) — it is NOT a general
+    /// transactional rollback of an arbitrary number of writes, and callers
+    /// must not rely on it to undo more than the one append they made
+    /// immediately before calling it.
+    ///
+    /// A no-op or session with no rows is not an error (mirrors the
+    /// "no rows" convention used elsewhere in this crate, e.g.
+    /// `ApprovalGate::pending_for_owner`) — deleting from an empty result
+    /// set is a valid (if surprising) call, never a failure.
+    pub async fn remove_last(&self, session_id: &str) -> anyhow::Result<()> {
+        let path = self.db_path.clone();
+        let sid = session_id.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let conn = open_conn(&path)?;
+            conn.execute(
+                "DELETE FROM messages WHERE id = (\
+                    SELECT id FROM messages WHERE session_id = ?1 ORDER BY id DESC LIMIT 1\
+                )",
+                rusqlite::params![sid],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await?
+    }
+
+    /// WR-13-02 (ADR-8): persist a refused turn's raw payload as auditable
+    /// evidence — "payload vai para auditoria, que é evidência, não
+    /// contexto". Returns the new row's id, the recoverable audit
+    /// reference (`load_blocked_turn` looks it back up) the caller can
+    /// surface to the owner, e.g. in the paired assistant refusal message
+    /// (WR-13-03).
+    pub async fn record_blocked_turn(
+        &self,
+        session_id: &str,
+        owner_id: &str,
+        payload: &str,
+        reason: &str,
+    ) -> anyhow::Result<i64> {
+        let path = self.db_path.clone();
+        let sid = session_id.to_owned();
+        let owner = owner_id.to_owned();
+        let payload = payload.to_owned();
+        let reason = reason.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let conn = open_conn(&path)?;
+            let now = now_nanos();
+            conn.execute(
+                "INSERT INTO blocked_turns (session_id, owner_id, payload, reason, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![sid, owner, payload, reason, now],
+            )?;
+            Ok::<_, anyhow::Error>(conn.last_insert_rowid())
+        })
+        .await?
+    }
+
+    /// WR-13-02: recover a previously-recorded blocked-turn payload by its
+    /// audit reference (the id `record_blocked_turn` returned). `None` when
+    /// no such row exists — never an error for the "not found" case.
+    pub async fn load_blocked_turn(&self, audit_ref: i64) -> anyhow::Result<Option<BlockedTurn>> {
+        let path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = open_conn(&path)?;
+            let mut stmt = conn.prepare(
+                "SELECT session_id, owner_id, payload, reason, created_at \
+                 FROM blocked_turns WHERE id = ?1",
+            )?;
+            let mut rows = stmt.query(rusqlite::params![audit_ref])?;
+            if let Some(row) = rows.next()? {
+                Ok::<_, anyhow::Error>(Some(BlockedTurn {
+                    session_id: row.get(0)?,
+                    owner_id: row.get(1)?,
+                    payload: row.get(2)?,
+                    reason: row.get(3)?,
+                    created_at: row.get(4)?,
+                }))
+            } else {
+                Ok(None)
+            }
+        })
+        .await?
     }
 
     pub async fn replace_with_summary(
@@ -974,5 +1103,92 @@ mod tests {
         sm.delete_runtime_handle("never-existed")
             .await
             .expect("delete of absent key must not error");
+    }
+
+    // ── WR-13 (ADR-8) — remove_last / blocked_turns audit ────────────────
+
+    /// WR-13-01: `remove_last` deletes exactly the one row just appended,
+    /// leaving any earlier history untouched.
+    #[tokio::test]
+    async fn test_remove_last_deletes_only_the_most_recent_message() {
+        let (_f, sm) = make_db().await;
+        let sid = sm.create_session().await.expect("create_session");
+        sm.append(
+            &sid,
+            Message {
+                role: Role::User,
+                content: MessageContent::Text("kept".to_owned()),
+            },
+            None,
+        )
+        .await
+        .expect("append kept");
+        sm.append(
+            &sid,
+            Message {
+                role: Role::User,
+                content: MessageContent::Text("to be removed".to_owned()),
+            },
+            None,
+        )
+        .await
+        .expect("append to be removed");
+
+        sm.remove_last(&sid).await.expect("remove_last");
+
+        let remaining = sm.load_recent(&sid).await.expect("load_recent");
+        assert_eq!(remaining.len(), 1);
+        match &remaining[0].content {
+            MessageContent::Text(t) => assert_eq!(t, "kept"),
+            other => panic!("expected Text(\"kept\"), got: {other:?}"),
+        }
+    }
+
+    /// `remove_last` on a session with no messages is not an error.
+    #[tokio::test]
+    async fn test_remove_last_on_empty_session_is_not_an_error() {
+        let (_f, sm) = make_db().await;
+        let sid = sm.create_session().await.expect("create_session");
+        sm.remove_last(&sid)
+            .await
+            .expect("remove_last on empty must not error");
+    }
+
+    /// WR-13-02: a recorded blocked turn round-trips with its full,
+    /// un-redacted payload and reason, and is recoverable by the returned id.
+    #[tokio::test]
+    async fn test_record_and_load_blocked_turn_round_trips() {
+        let (_f, sm) = make_db().await;
+        let sid = sm.create_session().await.expect("create_session");
+        let audit_ref = sm
+            .record_blocked_turn(
+                &sid,
+                "alice",
+                "the exact refused payload",
+                "Privacy egress blocked: local-only context bound for non-Ollama provider",
+            )
+            .await
+            .expect("record_blocked_turn");
+
+        let recovered = sm
+            .load_blocked_turn(audit_ref)
+            .await
+            .expect("load_blocked_turn")
+            .expect("must be present after record");
+        assert_eq!(recovered.session_id, sid);
+        assert_eq!(recovered.owner_id, "alice");
+        assert_eq!(recovered.payload, "the exact refused payload");
+        assert!(recovered.reason.contains("Privacy egress blocked"));
+    }
+
+    /// Loading an audit reference that was never recorded is `None`, not an error.
+    #[tokio::test]
+    async fn test_load_blocked_turn_returns_none_when_never_recorded() {
+        let (_f, sm) = make_db().await;
+        assert!(sm
+            .load_blocked_turn(1)
+            .await
+            .expect("load must not error")
+            .is_none());
     }
 }
