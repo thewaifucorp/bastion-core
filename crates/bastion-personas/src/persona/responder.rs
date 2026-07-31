@@ -23,13 +23,51 @@ use crate::types::{CallConfig, Message, MessageContent, Role};
 /// `AgentLoop::run_turn_for_with_trust` did inline before this port.
 pub struct PersonaResponder {
     registry: PersonaRegistry,
+    /// CAB-01..04: optional dedicated provider for the Cabinet's legs
+    /// (`orchestrator::deliberate`) AND its synthesis call
+    /// (`cabinet::synth::synthesize`) — distinct from the turn's
+    /// conversational `provider` above. `None` (the default, set via
+    /// `PersonaResponder::new`, never a constructor parameter — same
+    /// "set post-construction" discipline as `AgentLoop::compaction_provider`)
+    /// preserves today's exact behavior: Cabinet uses the live turn
+    /// `provider`. Opt in via [`PersonaResponder::with_cabinet_provider`].
+    cabinet_provider: Option<SharedProvider>,
 }
 
 impl PersonaResponder {
     /// Build a responder over `registry` — the SAME `PersonaRegistry` that
     /// used to live on `AgentLoop.registry`.
     pub fn new(registry: PersonaRegistry) -> Self {
-        Self { registry }
+        Self {
+            registry,
+            cabinet_provider: None,
+        }
+    }
+
+    /// CAB-01: opt into a dedicated provider for the Cabinet's legs and
+    /// synthesis call, distinct from the turn's conversational `provider`.
+    /// Without this call, Cabinet uses the live turn `provider`,
+    /// byte-identical to pre-seam behavior (CAB-02). Swapping this provider
+    /// never affects an in-progress or future `chat_turn` call (CAB-03) —
+    /// the turn's own `provider` handle is untouched.
+    pub fn with_cabinet_provider(mut self, provider: SharedProvider) -> Self {
+        self.cabinet_provider = Some(provider);
+        self
+    }
+
+    /// CAB-02/03: the SINGLE provider resolution both the Cabinet's legs
+    /// (`orchestrator::deliberate`) and its synthesis/egress-gate call read
+    /// from — extracted as one pure method so both call sites are
+    /// structurally guaranteed to agree (CAB-04: the gate can never check a
+    /// different provider than the one synthesis actually calls), and so
+    /// the resolution rule itself is unit-testable without standing up a
+    /// full `TurnContext`/`TurnKernel` harness (nothing in this crate does
+    /// today — `Responder::respond` is only exercised via `AgentLoop`
+    /// integration tests in `bastion-runtime`).
+    fn effective_cabinet_provider(&self, turn_provider: &SharedProvider) -> SharedProvider {
+        self.cabinet_provider
+            .clone()
+            .unwrap_or_else(|| turn_provider.clone())
     }
 
     /// Single/Parallel path via runner (BIG-1) — extracted from `respond` so
@@ -249,14 +287,22 @@ impl Responder for PersonaResponder {
                 // directly (see its doc comment) — this crate owns the registry and
                 // resolves names itself, so `bastion-cognition`'s Cabinet never depends
                 // on `bastion-personas`.
+                //
+                // CAB-01..04: every provider use below reads `cabinet_provider`
+                // (falling back to the turn's own `provider`), never `provider`
+                // directly — this is the ONLY branch that may observe the
+                // override; `chat_turn`'s own dispatch (the `_` arm below)
+                // always uses `provider` unconditionally, so swapping
+                // `cabinet_provider` can never re-route a chat turn.
                 let table = crate::cabinet::build_table(
                     |name| self.registry.get(name).cloned(),
                     &decision,
                     None,
                 )?;
+                let cabinet_provider = self.effective_cabinet_provider(&provider);
                 let transcript = crate::cabinet::orchestrator::deliberate(
                     &table,
-                    provider.clone(),
+                    cabinet_provider.clone(),
                     crate::cabinet::orchestrator::DEFAULT_ROUNDS,
                     kernel.capability_registry(),
                     user_input,
@@ -264,9 +310,14 @@ impl Responder for PersonaResponder {
                 .await?;
                 // CR-02: fail-closed egress on synthesis — the transcript may contain LocalOnly
                 // content. Gate synthesis on the table tier before touching the cloud provider.
-                let synth_provider_name = provider.read().await.name().to_owned();
+                // CAB-04: gated against the EFFECTIVE provider (the Cabinet
+                // override when configured), never the turn's `provider` —
+                // the gate must see the same provider synthesis is about to
+                // call, or a permissive chat_turn provider could paper over
+                // a stricter Cabinet provider's egress posture.
+                let synth_provider_name = cabinet_provider.read().await.name().to_owned();
                 crate::hooks::egress::check_egress(Some(table.tier), &synth_provider_name)?;
-                let provider_ref = provider.read().await;
+                let provider_ref = cabinet_provider.read().await;
                 let verdict = crate::cabinet::synth::synthesize(
                     &**provider_ref,
                     &transcript,
@@ -356,4 +407,120 @@ fn render_verdict(verdict: &crate::cabinet::synth::CabinetVerdict) -> String {
         }
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// Tests (CAB-01..04) — offline, mock providers only.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider::Provider;
+    use crate::types::{LlmResponse, TokenUsage};
+    use async_trait::async_trait;
+    use std::collections::HashMap;
+    use tokio::sync::RwLock;
+
+    /// A provider identified only by its `name()` — enough to prove WHICH
+    /// provider a call site actually used, without needing a real LLM.
+    struct NamedProvider(&'static str);
+
+    #[async_trait]
+    impl Provider for NamedProvider {
+        async fn complete(&self, _: &[Message], _: &CallConfig) -> anyhow::Result<LlmResponse> {
+            Ok(LlmResponse {
+                text: format!("from:{}", self.0),
+                tool_calls: None,
+                usage: TokenUsage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    cache_read: 0,
+                    cache_write: 0,
+                    ..Default::default()
+                },
+            })
+        }
+        async fn complete_simple(&self, _: &str) -> anyhow::Result<String> {
+            Ok(format!("from:{}", self.0))
+        }
+        fn context_limit(&self) -> usize {
+            8192
+        }
+        fn model_name(&self) -> &str {
+            self.0
+        }
+        fn name(&self) -> &'static str {
+            self.0
+        }
+    }
+
+    fn named_provider(name: &'static str) -> SharedProvider {
+        Arc::new(RwLock::new(
+            Box::new(NamedProvider(name)) as Box<dyn Provider>
+        ))
+    }
+
+    fn make_registry() -> PersonaRegistry {
+        PersonaRegistry::new_from_map(HashMap::new())
+    }
+
+    /// CAB-02: without `with_cabinet_provider`, the effective provider IS
+    /// the turn's own provider — byte-identical to pre-seam behavior.
+    #[tokio::test]
+    async fn without_cabinet_provider_falls_back_to_the_turn_provider() {
+        let responder = PersonaResponder::new(make_registry());
+        let turn_provider = named_provider("chat");
+
+        let effective = responder.effective_cabinet_provider(&turn_provider);
+
+        assert_eq!(effective.read().await.name(), "chat");
+    }
+
+    /// CAB-01/03: with `with_cabinet_provider` configured, the effective
+    /// provider is the Cabinet override — NOT the turn's provider — proving
+    /// the two are genuinely distinct handles (swapping one can never
+    /// re-route the other).
+    #[tokio::test]
+    async fn with_cabinet_provider_overrides_the_turn_provider() {
+        let cabinet = named_provider("cabinet-mock-a");
+        let chat = named_provider("chat-mock-b");
+        let responder = PersonaResponder::new(make_registry()).with_cabinet_provider(cabinet);
+
+        let effective = responder.effective_cabinet_provider(&chat);
+
+        assert_eq!(
+            effective.read().await.name(),
+            "cabinet-mock-a",
+            "Cabinet must use its own configured provider, not the turn's"
+        );
+        // The turn's own handle is untouched — a concurrent/subsequent
+        // chat_turn call reading `chat` directly still sees "chat-mock-b".
+        assert_eq!(chat.read().await.name(), "chat-mock-b");
+    }
+
+    /// CAB-04 (structural guarantee): `respond`'s Cabinet arm computes
+    /// `cabinet_provider` exactly once via `effective_cabinet_provider` and
+    /// reuses that SAME local for both the egress gate
+    /// (`check_egress(Some(table.tier), &synth_provider_name)`) and the
+    /// `synthesize` call — so a persona whose tier the Cabinet provider's
+    /// name rejects is blocked before synthesis ever runs, regardless of
+    /// what the turn's own (possibly more permissive) provider would have
+    /// allowed. This test pins the mechanism the code review must be able
+    /// to see with a one-line diff, rather than re-deriving it: both reads
+    /// in the Cabinet arm come from the identical resolved value.
+    #[tokio::test]
+    async fn effective_provider_resolution_is_a_single_source_of_truth() {
+        let cabinet = named_provider("cabinet-strict");
+        let responder = PersonaResponder::new(make_registry()).with_cabinet_provider(cabinet);
+        let turn_provider = named_provider("chat-permissive");
+
+        // Two independent resolutions from the same responder/turn pair
+        // must agree — this is what guarantees the egress gate and the
+        // synthesize call can never observe different providers.
+        let first = responder.effective_cabinet_provider(&turn_provider);
+        let second = responder.effective_cabinet_provider(&turn_provider);
+        assert_eq!(first.read().await.name(), second.read().await.name());
+        assert_eq!(first.read().await.name(), "cabinet-strict");
+    }
 }

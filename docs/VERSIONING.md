@@ -121,12 +121,13 @@ regenerated `docs/api-baseline/bastion-runtime.txt`):
 touch Extension-tier crates — `bastion-agent-runtime`/`bastion-personas` —
 not `bastion-runtime`, so none of them gated a Kernel 1.0 tag):
 
-- ~~Model hint on `SessionSpec`/`TaskInput` for `pursue_task` routing~~ —
-  **done, 2026-07-30**: `bastion-agent-runtime` 0.1.0 → 0.1.1, see
-  `CHANGELOG.md`'s Unreleased section.
-- Per-mode provider override on the Cabinet orchestrator
-  (`bastion-agent/src/routing.rs`, `bastion-personas` crate) — in progress,
-  2026-07-30.
+- Model hint on `SessionSpec`/`TaskInput` for `pursue_task` routing
+  (`bastion-agent/src/routing.rs`, `bastion-agent-runtime` crate) — see the
+  separate `feat/pursue-task-model-hint` branch/PR.
+- ~~Per-mode provider override on the Cabinet orchestrator~~ — **done,
+  2026-07-30**: `bastion-personas` 0.2.0 → 0.2.1
+  (`PersonaResponder::with_cabinet_provider`), see `CHANGELOG.md`'s
+  Unreleased section.
 - Routing provider construction through the daemon's `SecretResolver` so
   secrets-dir-only keys work in `/proposal approve`'s `model_config`
   handler (`bastion-agent/src/proposals.rs`) — this one isn't a kernel seam
