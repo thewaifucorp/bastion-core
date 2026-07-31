@@ -1149,7 +1149,9 @@ mod tests {
     async fn test_remove_last_on_empty_session_is_not_an_error() {
         let (_f, sm) = make_db().await;
         let sid = sm.create_session().await.expect("create_session");
-        sm.remove_last(&sid).await.expect("remove_last on empty must not error");
+        sm.remove_last(&sid)
+            .await
+            .expect("remove_last on empty must not error");
     }
 
     /// WR-13-02: a recorded blocked turn round-trips with its full,
