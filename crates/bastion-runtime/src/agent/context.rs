@@ -53,4 +53,20 @@ pub trait TurnContextProvider: Send + Sync {
         turn_msg: &str,
         persona: Option<&str>,
     ) -> Vec<ContextBlock>;
+
+    /// D-12/D-14b: whether this provider's blocks are identical across turns for the
+    /// same owner/persona (i.e. `context_for_turn` ignores `turn_msg`) — the property a
+    /// caching-aware provider (Anthropic `cache_control`) needs to treat this provider's
+    /// blocks as part of the STABLE prefix instead of paying to re-send/re-cache them
+    /// every turn.
+    ///
+    /// Defaults to `false` (volatile). A provider must opt IN by overriding this — never
+    /// opt out by omission — because misclassifying a turn-varying provider as stable
+    /// would let a cache hit silently serve a PREVIOUS turn's content (e.g. a stale
+    /// `<active_object>` snapshot) instead of the current one. See
+    /// `AgentLoop::build_system_prompt_with_cache_boundary` for how this is consumed and
+    /// `tests/prompt_cache_prefix.rs` for the regression guard.
+    fn is_turn_invariant(&self) -> bool {
+        false
+    }
 }

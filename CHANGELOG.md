@@ -9,6 +9,67 @@ version).
 
 ### Added
 
+- **Real STABLE/VOLATILE system-prompt caching for Anthropic (D-12/D-14b), plus the
+  missing regression test.** Root cause found while wiring a downstream host's
+  per-turn context block (an opaque `TurnContextProvider` — SEAM #2's own
+  documented use case) into a real turn without breaking cache correctness:
+  `AgentLoop::build_system_prompt`'s own doc comments have described a
+  STABLE-prefix contract for years (`tests/prompt_cache_prefix.rs` referenced
+  repeatedly as the regression guard), but that test file never existed, and
+  `AnthropicProvider::build_request_body` always sent the ENTIRE joined system
+  prompt as a single `cache_control`-tagged block — a turn-varying context block
+  (an `<active_object>` snapshot, a memory-RAG recall block, anything from a
+  non-turn-invariant `TurnContextProvider`) anywhere in that string invalidated
+  the whole cache on every single turn, silently, with no test catching it.
+  - `TurnContextProvider` (`bastion-runtime::agent::context`) gains
+    `is_turn_invariant() -> bool` (default `false` — a provider must opt IN to
+    being treated as cacheable, never opt out by omission, since misclassifying
+    a volatile provider would let a cache hit silently serve a PREVIOUS turn's
+    content). `IdentityProvider` (`bastion-cognition`) is the one real provider
+    that earns `true` — its own doc already documented ignoring `turn_msg`.
+  - `AgentLoop::build_context_parts_for_destination` now computes the boundary
+    from the ACTUAL blocks returned THIS turn (a nominally-stable provider can
+    legitimately return zero blocks some turns, e.g. `IdentityProvider` before
+    onboarding) — never a static per-provider count. New pub
+    `AgentLoop::build_system_prompt_with_cache_boundary` exposes it as a byte
+    offset without changing either existing `build_system_prompt`/
+    `build_system_prompt_parts` signature. `TurnKernel` gains the same method
+    (default: whole string volatile, boundary 0 — the safe fallback for any
+    future implementer that hasn't opted in; `AgentLoop` overrides it for real).
+  - `CallConfig` (`bastion-types`) gains `cache_stable_prefix_end: Option<usize>`
+    — `None` (every existing caller, via `Default`) means "treat the whole
+    string as volatile," byte-identical to today's behavior.
+  - `AnthropicProvider::build_request_body` splits `system` into two content
+    blocks when a usable boundary is present: the stable prefix keeps
+    `cache_control`, the volatile remainder doesn't. The boundary is
+    defensively re-validated (`is_char_boundary`, `<= len`) rather than trusted
+    across the kernel→provider crate boundary — an unusable value fails SAFE to
+    the original single-block shape, never panics on a slice index.
+  - Wired into every real `CallConfig` construction site that builds
+    `system_prompt` from `context_providers`: `AgentLoop::run_provider_fallback`
+    and `bastion-personas`'s `PersonaResponder::dispatch_single_or_parallel`.
+    Found and fixed along the way: `persona::runner::run_single`/`run_parallel`
+    rebuild `CallConfig` with `..Default::default()`, which was silently
+    dropping the boundary even after the caller set it — and when a persona
+    overrides the prompt with its OWN static `system_prompt` (registry-defined,
+    never varies by turn), that whole string is itself stable, not just
+    whatever boundary applied to the dynamic prompt it replaced. The 3
+    genuinely-static prompts elsewhere (`persona::router`'s classifier call,
+    `cabinet::synth`'s synthesis call, `learn`'s reflector call) explicitly set
+    `None` — they never touch `context_providers`, so no split applies.
+  - New `tests/prompt_cache_prefix.rs` (`bastion-runtime`, did not exist before):
+    proves the stable prefix is byte-identical across turns with different
+    volatile content, proves a volatile provider caps the boundary at its
+    position even when a stable provider comes after it (order-dependent, not
+    just count-dependent), and the zero-`context_providers` case. Plus 14 new
+    unit tests across `anthropic.rs` (split/fallback/char-boundary safety) and
+    `runner.rs`/`responder.rs` covering the persona-override boundary logic.
+  - Additive, per `docs/VERSIONING.md` §1: new field with a safe `Default`, new
+    trait methods with defaults, one new pub fn — no existing signature
+    changed. `bastion-types` advances to `0.2.3`, `bastion-runtime` to `0.2.5`,
+    `bastion-cognition` to `0.2.1`, `bastion-personas` to `0.2.2`,
+    `bastion-providers` to `0.2.4`.
+
 - `bastion-providers::copilot` (BPCOP-01..05) — the GitHub Copilot
   subscription connector, second implementor of `ProviderCredentialRefresher`
   after `codex` (BPCDX, `0.3.2` above), but structurally different from every

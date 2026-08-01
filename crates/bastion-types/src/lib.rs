@@ -162,6 +162,16 @@ pub struct CallConfig {
     pub tool_choice: Option<ToolChoice>,
     /// Per-call sampling temperature override. `None` uses the provider default.
     pub temperature: Option<f32>,
+    /// D-12/D-14b: byte offset into `system_prompt` marking the end of the
+    /// turn-invariant prefix — `system_prompt[..end]` is safe for a caching-aware
+    /// provider (Anthropic `cache_control`) to treat as a stable prefix reused across
+    /// turns; `system_prompt[end..]` varies per turn and must never be folded into the
+    /// same cached block. `None` means "treat the whole string as volatile" (no split) —
+    /// the behavior every caller had before this field existed, so it is always safe as
+    /// a default. Computed by `AgentLoop::build_system_prompt_with_cache_boundary`, never
+    /// guessed downstream — a provider must not attempt to re-derive this from the
+    /// string's shape.
+    pub cache_stable_prefix_end: Option<usize>,
 }
 
 impl Default for CallConfig {
@@ -173,6 +183,7 @@ impl Default for CallConfig {
             response_format: None,
             tool_choice: None,
             temperature: None,
+            cache_stable_prefix_end: None,
         }
     }
 }

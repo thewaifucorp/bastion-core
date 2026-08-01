@@ -225,6 +225,9 @@ pub async fn complete_structured_via_forced_tool_call(
         response_format: None,
         tool_choice: Some(ToolChoice::Forced(STRUCTURED_OUTPUT_TOOL.to_owned())),
         temperature: base_config.temperature,
+        // Same system_prompt content as base_config, just a different tool/response_format
+        // — the stable/volatile boundary within it hasn't moved.
+        cache_stable_prefix_end: base_config.cache_stable_prefix_end,
     };
 
     let response = provider.complete(messages, &forced_config).await?;

@@ -67,6 +67,9 @@ pub async fn route(
         response_format: None,
         tool_choice: None,
         tools: vec![],
+        // Static classification prompt (`build_router_system_prompt`), never built from
+        // context_providers — no stable/volatile split applies here.
+        cache_stable_prefix_end: None,
     };
     // D-09 runtime catch: a `supports_json_schema()==true` provider can still reject the
     // schema at runtime (OpenRouter's per-model variance) — fall through to the

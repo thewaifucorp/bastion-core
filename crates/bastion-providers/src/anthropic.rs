@@ -90,6 +90,15 @@ impl AnthropicProvider {
     /// top-level request key (verified narrow scope, T-08-02-02: this marker is
     /// applied ONLY to `body["system"]`, the D-12/D-13 stable prefix — never to the
     /// turn-volatile `messages` array).
+    ///
+    /// D-12/D-14b: when `config.cache_stable_prefix_end` names a real split point,
+    /// `system` becomes TWO blocks — the turn-invariant prefix (`cache_control`-tagged,
+    /// the same content across turns for the same owner) and the turn-scoped remainder
+    /// (untagged, sent fresh every call). Splitting matters because Anthropic charges the
+    /// cache write/read against the tagged block's own content — folding a per-turn
+    /// value (e.g. an `<active_object>` snapshot) into that same block would invalidate
+    /// the cache on every turn instead of just the identity/system-preamble portion. See
+    /// `system_content_blocks` below and `tests/prompt_cache_prefix.rs`.
     fn build_request_body(&self, messages_json: Value, config: &CallConfig) -> Value {
         let mut body = serde_json::json!({
             "model":      self.model,
@@ -99,11 +108,10 @@ impl AnthropicProvider {
         });
 
         if !config.system_prompt.is_empty() {
-            body["system"] = Value::Array(vec![serde_json::json!({
-                "type": "text",
-                "text": config.system_prompt,
-                "cache_control": {"type": "ephemeral"},
-            })]);
+            body["system"] = Value::Array(system_content_blocks(
+                &config.system_prompt,
+                config.cache_stable_prefix_end,
+            ));
         }
 
         if !config.tools.is_empty() {
@@ -127,6 +135,42 @@ impl AnthropicProvider {
         }
 
         body
+    }
+}
+
+/// D-12/D-14b: builds the `system` array. With no usable split point, this is the
+/// original single-block shape (one `cache_control`-tagged block) — every caller that
+/// predates `cache_stable_prefix_end` gets byte-identical behavior. With a real split
+/// point, the prefix (`text[..end]`) keeps the `cache_control` tag and the remainder
+/// (`text[end..]`) is a second, untagged block — Anthropic reads/writes the cache
+/// against the tagged block's own content, so folding turn-varying text into it would
+/// invalidate the cache on every turn instead of just that trailing portion.
+///
+/// `end` is defensively re-validated here (`is_char_boundary`, `<= text.len()`) rather
+/// than trusted blindly — `CallConfig::cache_stable_prefix_end` crosses a crate
+/// boundary (kernel → provider) and a provider must fail SAFE (fall back to the
+/// single-block shape) on an unusable value, never panic on a slice index.
+fn system_content_blocks(text: &str, stable_prefix_end: Option<usize>) -> Vec<Value> {
+    let usable_end =
+        stable_prefix_end.filter(|&end| end > 0 && end < text.len() && text.is_char_boundary(end));
+
+    match usable_end {
+        None => vec![serde_json::json!({
+            "type": "text",
+            "text": text,
+            "cache_control": {"type": "ephemeral"},
+        })],
+        Some(end) => vec![
+            serde_json::json!({
+                "type": "text",
+                "text": &text[..end],
+                "cache_control": {"type": "ephemeral"},
+            }),
+            serde_json::json!({
+                "type": "text",
+                "text": &text[end..],
+            }),
+        ],
     }
 }
 
@@ -341,6 +385,75 @@ mod tests {
                 "text": "you are a helpful assistant",
                 "cache_control": {"type": "ephemeral"},
             }])
+        );
+    }
+
+    #[test]
+    fn build_request_body_splits_system_at_the_stable_prefix_boundary() {
+        let provider = test_provider();
+        let config = CallConfig {
+            system_prompt: "STABLEVOLATILE".into(),
+            cache_stable_prefix_end: Some(6), // "STABLE" is 6 bytes
+            ..Default::default()
+        };
+        let body = provider.build_request_body(Value::Array(vec![]), &config);
+
+        assert_eq!(
+            body["system"],
+            serde_json::json!([
+                {
+                    "type": "text",
+                    "text": "STABLE",
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {
+                    "type": "text",
+                    "text": "VOLATILE",
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn build_request_body_ignores_a_boundary_at_or_past_the_end() {
+        let provider = test_provider();
+        for end in [0usize, 6, 100] {
+            let config = CallConfig {
+                system_prompt: "STABLE".into(),
+                cache_stable_prefix_end: Some(end),
+                ..Default::default()
+            };
+            let body = provider.build_request_body(Value::Array(vec![]), &config);
+            assert_eq!(
+                body["system"],
+                serde_json::json!([{
+                    "type": "text",
+                    "text": "STABLE",
+                    "cache_control": {"type": "ephemeral"},
+                }]),
+                "end={end} should fall back to the single-block shape"
+            );
+        }
+    }
+
+    #[test]
+    fn build_request_body_ignores_a_boundary_not_on_a_char_boundary() {
+        let provider = test_provider();
+        // "é" is a 2-byte UTF-8 sequence starting at byte 0 — offset 1 lands mid-char.
+        let config = CallConfig {
+            system_prompt: "école".into(),
+            cache_stable_prefix_end: Some(1),
+            ..Default::default()
+        };
+        let body = provider.build_request_body(Value::Array(vec![]), &config);
+        assert_eq!(
+            body["system"],
+            serde_json::json!([{
+                "type": "text",
+                "text": "école",
+                "cache_control": {"type": "ephemeral"},
+            }]),
+            "a mid-char boundary must fail safe to the single-block shape, never panic"
         );
     }
 

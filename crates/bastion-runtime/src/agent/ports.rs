@@ -416,6 +416,24 @@ pub trait TurnKernel: Send + Sync {
         persona: Option<&str>,
     ) -> String;
 
+    /// D-12/D-14b: like `build_system_prompt`, but also returns the byte offset marking
+    /// the end of the turn-invariant prefix — what
+    /// `bastion_types::CallConfig::cache_stable_prefix_end` needs so a caching-aware
+    /// provider (Anthropic `cache_control`) doesn't re-cache the whole system prompt every
+    /// turn just because ONE turn-scoped block (e.g. an `<active_object>` snapshot)
+    /// changed. Default implementation is the conservative fallback for any future
+    /// `TurnKernel` implementer that hasn't opted into the real computation: the whole
+    /// string counts as volatile (boundary 0) — correct, just not cache-optimized.
+    /// `AgentLoop` (the only implementer today) overrides this with the real one.
+    async fn build_system_prompt_with_cache_boundary(
+        &self,
+        owner: &str,
+        turn_msg: &str,
+        persona: Option<&str>,
+    ) -> (String, usize) {
+        (self.build_system_prompt(owner, turn_msg, persona).await, 0)
+    }
+
     /// Appends one message to the session transcript (`SessionManager::append`).
     async fn session_append(
         &self,
