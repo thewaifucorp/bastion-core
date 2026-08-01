@@ -7,6 +7,27 @@ version).
 
 ## Unreleased
 
+### Fixed
+
+- **`bastion-providers::codex`'s device-code flow used the wrong endpoints —
+  a real `403` on a live E2E run.** Three values, re-derived directly from
+  `codex-rs/login/src/device_code_auth.rs`'s literal source and cross-checked
+  against a real, unrelated bug report naming the same corrected path
+  (`github.com/openai/codex` issue #16079):
+  - The device usercode/token endpoints live under `{issuer}/api/accounts/deviceauth/...`,
+    not `{issuer}/deviceauth/...` — the missing `/api/accounts` segment is
+    what produced the `403`. New `DEVICE_API_PREFIX` const.
+  - `DeviceAuthorization::verification_uri` defaults to
+    `https://auth.openai.com/codex/device` (issuer-based), not
+    `https://chatgpt.com/codex/device` as before.
+  - `CodexConfig::redirect_uri` defaults to
+    `https://auth.openai.com/deviceauth/callback` (the device flow's own
+    callback, now confirmed), not the browser-PKCE flow's
+    `http://localhost:1455/auth/callback` it was incorrectly reusing.
+  - All three were previously flagged in the module's own "Sourcing and
+    confidence" doc as unconfirmed guesses — now confirmed against official
+    source, not guessed. 2 new tests lock the corrected values down.
+
 ### Added
 
 - `bastion-providers::copilot` (BPCOP-01..05) — the GitHub Copilot
