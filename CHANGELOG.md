@@ -9,6 +9,12 @@ version).
 
 ### Fixed
 
+- `bastion-providers::codex` now matches the ChatGPT Codex inference wire
+  contract: requests use SSE (`stream: true`), omit the rejected
+  `max_output_tokens` field, and collapse streamed text, tool-call items, and
+  final usage into the kernel's non-streaming `LlmResponse`.
+  `bastion-providers` advances to `0.2.4`.
+
 - **`bastion-providers::codex`'s device-code flow used the wrong endpoints —
   a real `403` on a live E2E run.** Three values, re-derived directly from
   `codex-rs/login/src/device_code_auth.rs`'s literal source and cross-checked
