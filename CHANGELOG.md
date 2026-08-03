@@ -7,7 +7,16 @@ version).
 
 ## Unreleased
 
+## 0.3.3 — 2026-08-03
+
 ### Fixed
+
+- Blocked user turns no longer remain in session history and leak into later
+  provider requests. `AgentLoop` now removes the failed append, stores denied
+  payloads as separately retrievable audit evidence, and records an assistant
+  refusal instead. `SessionManager` gains `remove_last`,
+  `record_blocked_turn`, and `load_blocked_turn`; `bastion-runtime` advances
+  to `0.2.5` for the additive public API.
 
 - **`bastion-providers::codex`'s device-code flow used the wrong endpoints —
   a real `403` on a live E2E run.** Three values, re-derived directly from
@@ -29,6 +38,18 @@ version).
     source, not guessed. 2 new tests lock the corrected values down.
 
 ### Added
+
+- `bastion-agent-runtime` advances to `0.1.1` with the optional, wire-compatible
+  `model_hint` on `SessionSpec` and `TaskInput`, allowing delegated coding
+  runtimes to receive the model selected by host routing while preserving the
+  previous behavior when absent.
+- `bastion-personas` advances to `0.2.1` with
+  `PersonaResponder::with_cabinet_provider`, separating Cabinet deliberation
+  from the conversational provider while keeping the turn provider as the
+  default. Egress checks and synthesis resolve through the same effective
+  provider.
+- `docs/MESH.md` documents mesh identity, P2P transport, `.af` interoperability,
+  export controls, and the mesh-sync scheduler.
 
 - `bastion-providers::copilot` (BPCOP-01..05) — the GitHub Copilot
   subscription connector, second implementor of `ProviderCredentialRefresher`
