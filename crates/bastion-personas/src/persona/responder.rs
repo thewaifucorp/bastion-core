@@ -88,14 +88,17 @@ impl PersonaResponder {
     ) -> anyhow::Result<String> {
         // Build CallConfig with tools from capability_registry (BIG-1).
         // SEAM #2: system_prompt built dynamically — context_providers inject opaque blocks.
-        let system_prompt = kernel
-            .build_system_prompt(owner, user_input, turn_persona)
+        // D-12/D-14b: cache_stable_prefix_end lets a caching-aware provider (Anthropic)
+        // avoid re-sending/re-caching the turn-invariant prefix every turn.
+        let (system_prompt, stable_prefix_end) = kernel
+            .build_system_prompt_with_cache_boundary(owner, user_input, turn_persona)
             .await;
         let tools = kernel.capability_registry().list_tool_defs();
         let config = CallConfig {
             system_prompt, // ← dinâmico via SEAM #2
             max_tokens: 4096,
             tools,
+            cache_stable_prefix_end: Some(stable_prefix_end),
             ..Default::default()
         };
 

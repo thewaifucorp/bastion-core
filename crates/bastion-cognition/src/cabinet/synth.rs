@@ -63,6 +63,9 @@ pub async fn synthesize_in_language(
         response_format: None,
         tool_choice: None,
         tools: vec![],
+        // Static synthesis prompt (`build_synthesis_prompt`), not built from
+        // context_providers — no stable/volatile split applies here.
+        cache_stable_prefix_end: None,
     };
     // D-09 runtime catch: mirrors persona::router::route — see that function for the
     // full rationale. Once a runtime schema rejection is caught, stay on the forced

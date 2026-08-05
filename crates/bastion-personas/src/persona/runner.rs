@@ -83,10 +83,11 @@ async fn run_single(
         system_prompt: if persona_system_prompt.is_empty() {
             config.system_prompt.clone()
         } else {
-            persona_system_prompt
+            persona_system_prompt.clone()
         },
         max_tokens: config.max_tokens,
         tools: config.tools.clone(),
+        cache_stable_prefix_end: cache_boundary_for_persona_config(config, &persona_system_prompt),
         ..Default::default()
     };
 
@@ -96,6 +97,25 @@ async fn run_single(
     };
 
     Ok(RunnerOutput::Single(persona_id, response))
+}
+
+/// D-12/D-14b: `config.cache_stable_prefix_end` is computed for `config.system_prompt` —
+/// if a persona overrides the prompt entirely with its own STATIC `system_prompt`
+/// (registry-defined, never varies per turn), that boundary no longer applies to the
+/// (different) string actually being sent, and reusing it verbatim would either point
+/// past the end of a shorter static prompt or silently under-cache a longer one. A
+/// persona's static prompt is itself turn-invariant by construction (it comes from the
+/// registry, not from `context_providers`), so the correct boundary for it is simply its
+/// own full length — the whole thing is stable, not just a prefix of it.
+fn cache_boundary_for_persona_config(
+    config: &CallConfig,
+    persona_system_prompt: &str,
+) -> Option<usize> {
+    if persona_system_prompt.is_empty() {
+        config.cache_stable_prefix_end
+    } else {
+        Some(persona_system_prompt.len())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -117,10 +137,14 @@ async fn run_parallel(
             system_prompt: if persona_system_prompt.is_empty() {
                 config.system_prompt.clone()
             } else {
-                persona_system_prompt
+                persona_system_prompt.clone()
             },
             max_tokens: config.max_tokens,
             tools: config.tools.clone(),
+            cache_stable_prefix_end: cache_boundary_for_persona_config(
+                config,
+                &persona_system_prompt,
+            ),
             ..Default::default()
         };
         let history_clone = history.to_owned();

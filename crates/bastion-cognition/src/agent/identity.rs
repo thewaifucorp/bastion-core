@@ -99,6 +99,14 @@ impl TurnContextProvider for IdentityProvider {
             }
         }
     }
+
+    // D-12/D-14b: ignores `turn_msg` (the `_` param above) by construction — content
+    // depends only on `owner`'s stored identity belief, stable across turns unless
+    // memory is explicitly rewritten mid-session (already the documented boundary of
+    // "stable" this provider's own module doc describes).
+    fn is_turn_invariant(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

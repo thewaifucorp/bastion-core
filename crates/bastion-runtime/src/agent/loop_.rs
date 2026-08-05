@@ -450,6 +450,40 @@ impl AgentLoop {
         let provider_name = self.provider.read().await.name().to_owned();
         self.build_context_parts_for_destination(owner, turn_msg, persona, &provider_name)
             .await
+            .0
+    }
+
+    /// D-12/D-14b: like [`AgentLoop::build_system_prompt`], but also returns the byte
+    /// offset in the returned string marking the end of the turn-invariant prefix — what
+    /// [`bastion_types::CallConfig::cache_stable_prefix_end`] needs. Kept as a separate
+    /// method (rather than changing `build_system_prompt`'s signature) so neither existing
+    /// public method's contract changes — purely additive.
+    ///
+    /// The boundary is computed from the ACTUAL blocks returned THIS turn, not a static
+    /// per-provider count: a nominally-stable provider (`is_turn_invariant() == true`) can
+    /// legitimately return zero blocks on a given turn (e.g. `IdentityProvider` before
+    /// onboarding), and once a NON-stable provider is reached in iteration order, nothing
+    /// after it counts toward the stable prefix even if it happens to emit zero blocks
+    /// this turn — position in the vec must stay stable across turns for the boundary to
+    /// mean anything to a caller that caches by byte offset.
+    pub async fn build_system_prompt_with_cache_boundary(
+        &self,
+        owner: &str,
+        turn_msg: &str,
+        persona: Option<&str>,
+    ) -> (String, usize) {
+        let provider_name = self.provider.read().await.name().to_owned();
+        let (parts, stable_prefix_len) = self
+            .build_context_parts_for_destination(owner, turn_msg, persona, &provider_name)
+            .await;
+        const JOIN_SEP: &str = "\n\n";
+        let joined = parts.join(JOIN_SEP);
+        let stable_byte_len: usize = parts[..stable_prefix_len]
+            .iter()
+            .map(|p| p.len())
+            .sum::<usize>()
+            + stable_prefix_len.saturating_sub(1) * JOIN_SEP.len();
+        (joined, stable_byte_len)
     }
 
     /// Ciclo 2.4: same per-block egress-checked context assembly as
@@ -464,16 +498,22 @@ impl AgentLoop {
     /// through). `build_system_prompt_parts` is unchanged and delegates to
     /// this with `self.provider`'s name, preserving its public signature
     /// (the `tests/prompt_cache_prefix.rs` D-14b contract) byte-for-byte.
+    /// Returns `(parts, stable_prefix_len)` — `parts[..stable_prefix_len]` is the
+    /// turn-invariant leading run (see [`AgentLoop::build_system_prompt_with_cache_boundary`]
+    /// for how callers use this).
     async fn build_context_parts_for_destination(
         &self,
         owner: &str,
         turn_msg: &str,
         persona: Option<&str>,
         egress_destination_name: &str,
-    ) -> Vec<String> {
+    ) -> (Vec<String>, usize) {
         let mut parts: Vec<String> = vec![DEFAULT_SYSTEM_PROMPT.to_owned()];
+        let mut stable_prefix_len = 1; // DEFAULT_SYSTEM_PROMPT (index 0) is always stable.
+        let mut still_stable = true;
 
         for provider in &self.context_providers {
+            let provider_is_stable = provider.is_turn_invariant();
             let blocks = provider.context_for_turn(owner, turn_msg, persona).await;
             for block in blocks {
                 // SECURITY: verificar egress pelo tier do BLOCO, não da persona.
@@ -483,6 +523,9 @@ impl AgentLoop {
                     .is_ok()
                 {
                     parts.push(block.content);
+                    if still_stable && provider_is_stable {
+                        stable_prefix_len += 1;
+                    }
                 } else {
                     tracing::debug!(
                         event = "context_block_skipped_egress",
@@ -491,9 +534,15 @@ impl AgentLoop {
                     );
                 }
             }
+            // Once a non-stable provider is reached in iteration order, nothing after it
+            // can join the stable prefix — even if THIS provider emitted zero blocks this
+            // turn (it might emit one next turn, shifting everything after it).
+            if !provider_is_stable {
+                still_stable = false;
+            }
         }
 
-        parts
+        (parts, stable_prefix_len)
     }
 
     /// Ciclo 2.4 (`docs/SUPPORT-MATRIX.md` §3, mode 2):
@@ -537,7 +586,7 @@ impl AgentLoop {
         // destination (the harness id) — REUSE of the same mechanism/tier
         // rules the Model path's system prompt uses, via
         // `build_context_parts_for_destination` (not a new check).
-        let context_parts = self
+        let (context_parts, _stable_prefix_len) = self
             .build_context_parts_for_destination(owner, user_input, None, runtime_id)
             .await;
         let mut prompt = context_parts.join("\n\n");
@@ -2192,13 +2241,16 @@ impl AgentLoop {
         // SEAM #2: build_system_prompt applies per-block egress check so LocalOnly blocks
         // are not injected when the active provider is cloud. This covers the fallback path
         // (T-05-03-03 mitigation — egress leak in fallback path).
-        let system_prompt = self
-            .build_system_prompt(owner, user_input, turn_persona)
+        // D-12/D-14b: cache_stable_prefix_end lets a caching-aware provider (Anthropic)
+        // avoid re-sending/re-caching the turn-invariant prefix every turn.
+        let (system_prompt, stable_prefix_end) = self
+            .build_system_prompt_with_cache_boundary(owner, user_input, turn_persona)
             .await;
         let config = CallConfig {
             system_prompt,
             max_tokens: 4096,
             tools,
+            cache_stable_prefix_end: Some(stable_prefix_end),
             ..Default::default()
         };
 
@@ -2443,6 +2495,15 @@ impl TurnKernel for AgentLoop {
         persona: Option<&str>,
     ) -> String {
         AgentLoop::build_system_prompt(self, owner, turn_msg, persona).await
+    }
+
+    async fn build_system_prompt_with_cache_boundary(
+        &self,
+        owner: &str,
+        turn_msg: &str,
+        persona: Option<&str>,
+    ) -> (String, usize) {
+        AgentLoop::build_system_prompt_with_cache_boundary(self, owner, turn_msg, persona).await
     }
 
     async fn session_append(

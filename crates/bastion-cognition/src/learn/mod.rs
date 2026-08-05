@@ -210,6 +210,9 @@ impl CandidateGenerator for LlmCandidateGenerator {
             response_format: None,
             tool_choice: None,
             tools: vec![],
+            // Static reflector prompt, not built from context_providers — no
+            // stable/volatile split applies here.
+            cache_stable_prefix_end: None,
         };
         // The forced-tool-call helper needs a mutable registry to register/remove its
         // ephemeral, pure-echo `StructuredOutputCapability` (RAII-scoped within the one

@@ -26,6 +26,7 @@ struct agent/loop_.rs:PendingItem
 type agent/loop_.rs:SharedFallbackModels
 fn agent/loop_.rs:add_context_provider
 fn agent/loop_.rs:build_system_prompt_parts
+fn agent/loop_.rs:build_system_prompt_with_cache_boundary
 fn agent/loop_.rs:cancel_delegated_task
 fn agent/loop_.rs:delegate_task
 fn agent/loop_.rs:drain_handle
