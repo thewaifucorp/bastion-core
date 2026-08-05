@@ -11,6 +11,7 @@ const codex.rs:DEFAULT_CLIENT_ID
 const codex.rs:DEFAULT_DEVICE_AUTHORIZATION_PATH
 const codex.rs:DEFAULT_DEVICE_TOKEN_PATH
 const codex.rs:DEFAULT_ISSUER
+const codex.rs:DEVICE_API_PREFIX
 struct codex.rs:DeviceAuthorization
 enum codex.rs:DevicePollOutcome
 fn codex.rs:device_authorization_url

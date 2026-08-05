@@ -7,6 +7,41 @@ version).
 
 ## Unreleased
 
+## 0.3.3 — 2026-08-03
+
+### Fixed
+
+- Blocked user turns no longer remain in session history and leak into later
+  provider requests. `AgentLoop` now removes the failed append, stores denied
+  payloads as separately retrievable audit evidence, and records an assistant
+  refusal instead. `SessionManager` gains `remove_last`,
+  `record_blocked_turn`, and `load_blocked_turn`; `bastion-runtime` advances
+  to `0.2.5` for the additive public API.
+- `bastion-providers::codex` now matches the ChatGPT Codex inference wire
+  contract: requests use SSE (`stream: true`), omit the rejected
+  `max_output_tokens` field, and collapse streamed text, tool-call items, and
+  final usage into the kernel's non-streaming `LlmResponse`.
+  `bastion-providers` advances to `0.2.4`.
+
+- **`bastion-providers::codex`'s device-code flow used the wrong endpoints —
+  a real `403` on a live E2E run.** Three values, re-derived directly from
+  `codex-rs/login/src/device_code_auth.rs`'s literal source and cross-checked
+  against a real, unrelated bug report naming the same corrected path
+  (`github.com/openai/codex` issue #16079):
+  - The device usercode/token endpoints live under `{issuer}/api/accounts/deviceauth/...`,
+    not `{issuer}/deviceauth/...` — the missing `/api/accounts` segment is
+    what produced the `403`. New `DEVICE_API_PREFIX` const.
+  - `DeviceAuthorization::verification_uri` defaults to
+    `https://auth.openai.com/codex/device` (issuer-based), not
+    `https://chatgpt.com/codex/device` as before.
+  - `CodexConfig::redirect_uri` defaults to
+    `https://auth.openai.com/deviceauth/callback` (the device flow's own
+    callback, now confirmed), not the browser-PKCE flow's
+    `http://localhost:1455/auth/callback` it was incorrectly reusing.
+  - All three were previously flagged in the module's own "Sourcing and
+    confidence" doc as unconfirmed guesses — now confirmed against official
+    source, not guessed. 2 new tests lock the corrected values down.
+
 ### Added
 
 - **Real STABLE/VOLATILE system-prompt caching for Anthropic (D-12/D-14b), plus the
@@ -69,6 +104,17 @@ version).
     changed. `bastion-types` advances to `0.2.3`, `bastion-runtime` to `0.2.5`,
     `bastion-cognition` to `0.2.1`, `bastion-personas` to `0.2.2`,
     `bastion-providers` to `0.2.4`.
+- `bastion-agent-runtime` advances to `0.1.1` with the optional, wire-compatible
+  `model_hint` on `SessionSpec` and `TaskInput`, allowing delegated coding
+  runtimes to receive the model selected by host routing while preserving the
+  previous behavior when absent.
+- `bastion-personas` advances to `0.2.1` with
+  `PersonaResponder::with_cabinet_provider`, separating Cabinet deliberation
+  from the conversational provider while keeping the turn provider as the
+  default. Egress checks and synthesis resolve through the same effective
+  provider.
+- `docs/MESH.md` documents mesh identity, P2P transport, `.af` interoperability,
+  export controls, and the mesh-sync scheduler.
 
 - `bastion-providers::copilot` (BPCOP-01..05) — the GitHub Copilot
   subscription connector, second implementor of `ProviderCredentialRefresher`

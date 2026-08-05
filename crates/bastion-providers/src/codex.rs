@@ -29,20 +29,33 @@
 //! a spec, but it is still an unversioned internal surface OpenAI could change
 //! without notice — which is exactly why BPCDX-05 gates `Supported`.
 //!
-//! Two things could **not** be confirmed to that standard and are called out
-//! at their point of use instead of guessed:
+//! 2026-08-01 update: the three items below were re-derived directly from
+//! `codex-rs/login/src/device_code_auth.rs`'s literal source (quoted
+//! verbatim, not summarized) after a live E2E run against the real
+//! `auth.openai.com` returned `403` on the endpoint this module used to
+//! build. Independently cross-checked against a real, unrelated user's bug
+//! report naming the exact same corrected path
+//! (`github.com/openai/codex` issue #16079, a proxy/TLS report that quotes
+//! `https://auth.openai.com/api/accounts/deviceauth/usercode` verbatim).
 //!
+//! - **Device endpoints are under `/api/accounts`, not the issuer root.**
+//!   `device_code_auth.rs`: `let base_url = opts.issuer.trim_end_matches('/');
+//!   let api_base_url = format!("{base_url}/api/accounts");` — the usercode
+//!   and token-poll requests both go to `{api_base_url}/deviceauth/{usercode,token}`.
+//!   The previous `{issuer}/deviceauth/...` (missing `/api/accounts`) is what
+//!   produced the `403`.
+//! - [`DeviceAuthorization::verification_uri`]: now confirmed —
+//!   `device_code_auth.rs`: `verification_url: format!("{base_url}/codex/device")`
+//!   where `base_url` is `opts.issuer` (`https://auth.openai.com`), NOT
+//!   `https://chatgpt.com` as previously defaulted.
 //! - [`CodexConfig::redirect_uri`]: confirmed for the *browser* PKCE flow
-//!   (`http://localhost:{port}/auth/callback`, `codex-rs/login/src/server.rs`);
-//!   not confirmed whether the *headless* device flow's final
-//!   `authorization_code` exchange (`exchange_authorization_code`) reuses that
-//!   same value or a different placeholder, since no local callback server
-//!   exists in that path. Defaults to the browser-flow value; override before
-//!   promoting this connector past `Experimental`.
-//! - [`DeviceAuthorization::verification_uri`]: the official source template
-//!   is `{base_uri}/codex/device` with `base_uri` never resolved to a literal
-//!   in the files read; defaulted here to `https://chatgpt.com/codex/device`
-//!   on the strength of one independent search hit, not official source.
+//!   (`http://localhost:{port}/auth/callback`, `codex-rs/login/src/server.rs`),
+//!   and now ALSO confirmed for the *headless* device flow this module
+//!   actually implements — a separate, real value:
+//!   `device_code_auth.rs`: `let redirect_uri = format!("{base_url}/deviceauth/callback");`
+//!   (same `base_url` = issuer). The device flow's own exchange
+//!   (`exchange_authorization_code`) must use this value, not the
+//!   browser-flow's localhost callback it was defaulting to before.
 //!
 //! A THIRD claim from earlier research — that the API base might be
 //! `https://chatgpt.com/backend-api/wham` rather than `.../backend-api/codex`
@@ -97,10 +110,16 @@ pub const DEFAULT_ISSUER: &str = "https://auth.openai.com";
 /// `/backend-api/wham` finding is not a conflict with this.
 pub const DEFAULT_API_BASE: &str = "https://chatgpt.com/backend-api/codex";
 
-/// `codex-rs/login/src/device_code_auth.rs`: `{auth_base_url}/deviceauth/usercode`.
+/// `codex-rs/login/src/device_code_auth.rs`: `let api_base_url =
+/// format!("{base_url}/api/accounts");` — the device endpoints live under
+/// this prefix, not the issuer root directly (see the module doc's
+/// 2026-08-01 update).
+pub const DEVICE_API_PREFIX: &str = "/api/accounts";
+
+/// `codex-rs/login/src/device_code_auth.rs`: `{api_base_url}/deviceauth/usercode`.
 pub const DEFAULT_DEVICE_AUTHORIZATION_PATH: &str = "/deviceauth/usercode";
 
-/// `codex-rs/login/src/device_code_auth.rs`: `{auth_base_url}/deviceauth/token`.
+/// `codex-rs/login/src/device_code_auth.rs`: `{api_base_url}/deviceauth/token`.
 pub const DEFAULT_DEVICE_TOKEN_PATH: &str = "/deviceauth/token";
 
 /// Configuration for the Codex connector. Every URL is overridable so a
@@ -115,11 +134,15 @@ pub struct CodexConfig {
     /// Origin + path for the Responses-API inference call, WITHOUT the
     /// trailing `/responses` (added by [`CodexProvider`] per call).
     pub api_base: String,
-    /// See the module doc: confirmed for the browser PKCE flow, not
-    /// independently confirmed for the device flow's final exchange.
+    /// The device flow's own callback, `{issuer}/deviceauth/callback` —
+    /// confirmed via `codex-rs/login/src/device_code_auth.rs` (see the
+    /// module doc's 2026-08-01 update). Distinct from the browser PKCE
+    /// flow's `http://localhost:{port}/auth/callback`, which this module
+    /// does not implement.
     pub redirect_uri: String,
     /// Shown to the operator alongside the user code during device login.
-    /// See the module doc: template confirmed, literal origin not.
+    /// `{issuer}/codex/device` — confirmed via `codex-rs/login/src/device_code_auth.rs`
+    /// (see the module doc's 2026-08-01 update).
     pub verification_uri: String,
 }
 
@@ -130,14 +153,14 @@ impl CodexConfig {
 
     pub fn device_authorization_url(&self) -> String {
         format!(
-            "{}{DEFAULT_DEVICE_AUTHORIZATION_PATH}",
+            "{}{DEVICE_API_PREFIX}{DEFAULT_DEVICE_AUTHORIZATION_PATH}",
             self.issuer.trim_end_matches('/')
         )
     }
 
     pub fn device_token_url(&self) -> String {
         format!(
-            "{}{DEFAULT_DEVICE_TOKEN_PATH}",
+            "{}{DEVICE_API_PREFIX}{DEFAULT_DEVICE_TOKEN_PATH}",
             self.issuer.trim_end_matches('/')
         )
     }
@@ -153,9 +176,10 @@ impl Default for CodexConfig {
             client_id: DEFAULT_CLIENT_ID.to_string(),
             issuer: DEFAULT_ISSUER.to_string(),
             api_base: DEFAULT_API_BASE.to_string(),
-            // codex-rs/login/src/server.rs: DEFAULT_PORT = 1455.
-            redirect_uri: "http://localhost:1455/auth/callback".to_string(),
-            verification_uri: "https://chatgpt.com/codex/device".to_string(),
+            // codex-rs/login/src/device_code_auth.rs: `{issuer}/deviceauth/callback`.
+            redirect_uri: format!("{DEFAULT_ISSUER}/deviceauth/callback"),
+            // codex-rs/login/src/device_code_auth.rs: `{issuer}/codex/device`.
+            verification_uri: format!("{DEFAULT_ISSUER}/codex/device"),
         }
     }
 }
@@ -182,7 +206,7 @@ pub enum DevicePollOutcome {
     },
 }
 
-/// Step 1: `POST {issuer}/deviceauth/usercode`.
+/// Step 1: `POST {issuer}/api/accounts/deviceauth/usercode`.
 pub async fn start_device_authorization(
     http: &reqwest::Client,
     config: &CodexConfig,
@@ -214,7 +238,7 @@ pub async fn start_device_authorization(
     })
 }
 
-/// Step 2: `POST {issuer}/deviceauth/token`, called every `interval_secs`
+/// Step 2: `POST {issuer}/api/accounts/deviceauth/token`, called every `interval_secs`
 /// until it returns [`DevicePollOutcome::Authorized`]. Per `codex-rs`: a 403
 /// or 404 means "not approved yet", any other non-2xx is terminal.
 pub async fn poll_device_authorization(
@@ -523,12 +547,12 @@ impl CodexProvider {
             "model": self.model,
             "input": codex_input_from_messages(messages),
             "instructions": config.system_prompt,
-            // WHAM-specific requirement (confirmed by 7shi/codex-oauth and
-            // numman-ali/opencode-openai-codex-auth independently): omitting
-            // this is rejected.
+            // The ChatGPT Codex backend is stream-only. OpenAI's own
+            // ResponsesApiRequest sets this to true and does not expose a
+            // max_output_tokens field; a live E2E returned HTTP 400 when we
+            // sent stream=false plus max_output_tokens.
             "store": false,
-            "stream": false,
-            "max_output_tokens": config.max_tokens,
+            "stream": true,
         });
         if let Some(temperature) = config.temperature {
             body["temperature"] = json!(temperature);
@@ -664,6 +688,66 @@ fn parse_codex_response(body: &Value) -> LlmResponse {
     }
 }
 
+/// Collapse the Codex backend's SSE-only Responses wire format into the
+/// non-streaming [`Provider::complete`] result expected by the kernel.
+/// Text arrives as deltas, while function calls arrive as completed output
+/// items; `response.completed.response` carries usage but may have an empty
+/// `output`, so none of those sources can replace the others.
+fn parse_codex_sse(body: &str) -> anyhow::Result<LlmResponse> {
+    let mut streamed_text = String::new();
+    let mut completed_items = Vec::new();
+    let mut completed_response = Value::Null;
+
+    for line in body.lines() {
+        let Some(data) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        let event: Value = serde_json::from_str(data)
+            .map_err(|e| anyhow::anyhow!("codex SSE contained invalid JSON: {e}"))?;
+        match event["type"].as_str() {
+            Some("response.output_text.delta") => {
+                if let Some(delta) = event["delta"].as_str() {
+                    streamed_text.push_str(delta);
+                }
+            }
+            Some("response.output_item.done") => {
+                if !event["item"].is_null() {
+                    completed_items.push(event["item"].clone());
+                }
+            }
+            Some("response.completed") => completed_response = event["response"].clone(),
+            Some("error") | Some("response.failed") => {
+                let message = event["error"]["message"]
+                    .as_str()
+                    .or_else(|| event["response"]["error"]["message"].as_str())
+                    .or_else(|| event["message"].as_str())
+                    .unwrap_or("<no message>");
+                anyhow::bail!("codex API stream failed: {message}");
+            }
+            _ => {}
+        }
+    }
+
+    let mut result = parse_codex_response(&completed_response);
+    if !streamed_text.is_empty() {
+        result.text = streamed_text;
+    }
+    if !completed_items.is_empty() {
+        let item_result = parse_codex_response(&json!({"output": completed_items}));
+        if result.text.is_empty() {
+            result.text = item_result.text;
+        }
+        if result.tool_calls.is_none() {
+            result.tool_calls = item_result.tool_calls;
+        }
+    }
+    Ok(result)
+}
+
 #[async_trait::async_trait]
 impl Provider for CodexProvider {
     async fn complete(
@@ -674,7 +758,8 @@ impl Provider for CodexProvider {
         let mut req = self
             .client
             .post(format!("{}/responses", self.api_base.trim_end_matches('/')))
-            .bearer_auth(&self.access_token);
+            .bearer_auth(&self.access_token)
+            .header(reqwest::header::ACCEPT, "text/event-stream");
         if let Some(account_id) = &self.account_id {
             req = req.header("ChatGPT-Account-Id", account_id);
         }
@@ -684,7 +769,7 @@ impl Provider for CodexProvider {
             .send()
             .await?;
         let status = resp.status();
-        let body: Value = resp.json().await.unwrap_or(Value::Null);
+        let body = resp.text().await?;
         if !status.is_success() {
             // A 401 here is the host's cue to drive
             // ProviderCredentialLifecycle::refresh and retry with a fresh
@@ -693,10 +778,13 @@ impl Provider for CodexProvider {
             // every other provider in this crate.
             anyhow::bail!(
                 "codex API error: HTTP {status}: {}",
-                body["error"]["message"].as_str().unwrap_or("<no message>")
+                serde_json::from_str::<Value>(&body)
+                    .ok()
+                    .and_then(|value| value["error"]["message"].as_str().map(str::to_owned))
+                    .unwrap_or_else(|| "<no message>".to_string())
             );
         }
-        Ok(parse_codex_response(&body))
+        parse_codex_sse(&body)
     }
 
     async fn complete_simple(&self, prompt: &str) -> anyhow::Result<String> {
@@ -747,15 +835,47 @@ mod tests {
         assert_eq!(config.token_url(), "https://auth.openai.com/oauth/token");
         assert_eq!(
             config.device_authorization_url(),
-            "https://auth.openai.com/deviceauth/usercode"
+            "https://auth.openai.com/api/accounts/deviceauth/usercode"
         );
         assert_eq!(
             config.device_token_url(),
-            "https://auth.openai.com/deviceauth/token"
+            "https://auth.openai.com/api/accounts/deviceauth/token"
         );
         assert_eq!(
             config.responses_url(),
             "https://chatgpt.com/backend-api/codex/responses"
+        );
+    }
+
+    /// A live E2E run (2026-08-01) against the real `auth.openai.com` caught
+    /// this exact regression: the device endpoints live under `/api/accounts`,
+    /// not the issuer root — a `403` on `device_authorization_url()` before
+    /// this fix. Locked down separately from the other URL assertions above
+    /// so a future edit can't silently drop the prefix again.
+    #[test]
+    fn device_urls_include_the_api_accounts_prefix() {
+        let config = CodexConfig::default();
+        assert!(config
+            .device_authorization_url()
+            .contains("/api/accounts/deviceauth/"));
+        assert!(config
+            .device_token_url()
+            .contains("/api/accounts/deviceauth/"));
+    }
+
+    /// `verification_uri`/`redirect_uri` default to `{issuer}`-based values,
+    /// not the browser-flow's `chatgpt.com`/`localhost` placeholders that
+    /// were defaulted here before this fix.
+    #[test]
+    fn verification_and_redirect_defaults_are_issuer_based() {
+        let config = CodexConfig::default();
+        assert_eq!(
+            config.verification_uri,
+            "https://auth.openai.com/codex/device"
+        );
+        assert_eq!(
+            config.redirect_uri,
+            "https://auth.openai.com/deviceauth/callback"
         );
     }
 
@@ -866,11 +986,15 @@ mod tests {
     }
 
     #[test]
-    fn build_request_always_sets_store_false_and_stream_false() {
+    fn build_request_matches_the_codex_streaming_contract() {
         let provider = CodexProvider::with_credential("gpt-5", "tok", None);
         let body = provider.build_request(&[], &CallConfig::default());
         assert_eq!(body["store"], false);
-        assert_eq!(body["stream"], false);
+        assert_eq!(body["stream"], true);
+        assert!(
+            body.get("max_output_tokens").is_none(),
+            "the ChatGPT Codex backend rejects max_output_tokens"
+        );
     }
 
     #[test]
@@ -928,6 +1052,33 @@ mod tests {
         let resp = parse_codex_response(&json!({}));
         assert_eq!(resp.text, "");
         assert!(resp.tool_calls.is_none());
+    }
+
+    #[test]
+    fn parse_sse_combines_text_tool_calls_and_completed_usage() {
+        let body = concat!(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hel\"}\n\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"lo\"}\n\n",
+            "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"call_id\":\"c1\",\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/x\\\"}\"}}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"output\":[],\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"input_tokens_details\":{\"cached_tokens\":2}}}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let resp = parse_codex_sse(body).unwrap();
+        assert_eq!(resp.text, "hello");
+        assert_eq!(resp.tool_calls.as_ref().unwrap()[0].name, "read_file");
+        assert_eq!(resp.usage.input_tokens, 10);
+        assert_eq!(resp.usage.output_tokens, 5);
+        assert_eq!(resp.usage.cache_read, 2);
+    }
+
+    #[test]
+    fn parse_sse_surfaces_vendor_failure_without_accepting_partial_text() {
+        let body = concat!(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n",
+            "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"model unavailable\"}}}\n\n",
+        );
+        let err = parse_codex_sse(body).unwrap_err();
+        assert!(err.to_string().contains("model unavailable"));
     }
 
     #[test]
