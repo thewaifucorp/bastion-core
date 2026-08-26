@@ -25,6 +25,7 @@
 //! session properties that can be reapplied, and [`DenyScope`] determines
 //! whether a denial ends one request or the whole turn.
 
+pub mod acp;
 pub mod acpx;
 pub mod codex;
 pub mod conformance;
