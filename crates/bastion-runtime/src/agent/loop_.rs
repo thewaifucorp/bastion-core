@@ -676,6 +676,12 @@ impl AgentLoop {
                     id,
                     action,
                     detail,
+                    // `edits` (the proposed diff the harness attached to the
+                    // request) is deliberately not consumed here: this arm
+                    // resolves immediately and never shows anything to a human,
+                    // so a preview would have no reader. The product surface
+                    // that DOES ask a person reads it from the event itself.
+                    ..
                 } if t == task => {
                     // 6a (docs/ARCHITECTURE.md §6a):
                     // audited through the SAME `PermissionGate`/`permission_queue`
@@ -2836,6 +2842,10 @@ fn spawn_delegated_task_consumer(
                             id,
                             action,
                             detail,
+                            // Not consumed here — the gate is keyed by
+                            // (id, action, detail); the proposed diff belongs to
+                            // whatever surface renders the decision.
+                            ..
                         } if t == task_id => {
                             tracing::info!(
                                 event = "agent_runtime_delegated_permission_request",

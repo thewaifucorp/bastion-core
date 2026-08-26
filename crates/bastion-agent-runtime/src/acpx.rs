@@ -970,6 +970,13 @@ impl FrameInterpreter {
                     id,
                     action,
                     detail,
+                    // Deliberately empty. The frame acpx forwards does carry the
+                    // proposed diff, but by the time it reaches here acpx has
+                    // ALREADY answered the request (`approvals = HarnessOwned`).
+                    // Rendering an approvable-looking preview for a decision
+                    // nobody can take would be the exact dishonesty this event
+                    // stream exists to avoid.
+                    edits: Vec::new(),
                 });
             }
         }
