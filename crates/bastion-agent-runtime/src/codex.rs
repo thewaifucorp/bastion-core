@@ -757,6 +757,10 @@ async fn handle_server_request(
         id: PermissionRequestId(perm_id),
         action,
         detail,
+        // Empty until this adapter learns to read codex's own patch payload.
+        // An empty list means "no preview reported", which is honest; the
+        // approver decides on the action class and path, and knows it.
+        edits: Vec::new(),
     });
 }
 

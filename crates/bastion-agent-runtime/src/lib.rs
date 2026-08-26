@@ -412,6 +412,32 @@ pub enum DenyScope {
     Turn,
 }
 
+/// One file edit a harness is asking permission to perform, as reported with
+/// the request itself — BEFORE it happens.
+///
+/// This is what makes a permission prompt a decision instead of a notification:
+/// the approver sees the bytes that would be written, not just "the agent wants
+/// to write a file". A harness that reports no preview yields an empty list,
+/// which is honest; the approver then knows they are deciding on the action
+/// class and the path alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProposedEdit {
+    /// Path relative to the session workspace root when it falls inside it,
+    /// absolute otherwise — an edit AIMED OUTSIDE the root must stay visibly
+    /// outside, never be flattened into something that reads as local.
+    pub path: PathBuf,
+    /// Content before the edit, when the harness reported it. `None` means the
+    /// harness did not say — which is not the same as "the file is new", and
+    /// must not be rendered as if it were.
+    pub old_text: Option<String>,
+    /// Content the harness proposes to write.
+    pub new_text: String,
+    /// True when `old_text`/`new_text` were shortened to bound the event.
+    /// A truncated preview MUST be labelled as such wherever it is shown: a
+    /// person approving a diff they cannot fully see has to know that.
+    pub truncated: bool,
+}
+
 /// Decision returned to the harness for a pending permission request.
 /// Produced by Bastion's approval flow — never synthesized by the adapter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -481,6 +507,15 @@ pub enum RuntimeEvent {
         id: PermissionRequestId,
         action: PermissionAction,
         detail: String,
+        /// The edits this request would perform, when the harness reports them
+        /// alongside the request. Empty when it reports none — never a
+        /// fabricated preview.
+        ///
+        /// `#[serde(default)]` so a payload serialized before this field
+        /// existed still deserializes, same discipline as
+        /// [`SessionSpec::model_hint`].
+        #[serde(default)]
+        edits: Vec<ProposedEdit>,
     },
     Diff {
         task: TaskId,

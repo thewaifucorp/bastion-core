@@ -111,6 +111,14 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(60);
 /// marked cancelled, when the caller does not specify one.
 const DEFAULT_CANCEL_GRACE: Duration = Duration::from_millis(500);
 
+/// Largest preview text carried per side of a proposed edit.
+///
+/// A permission event travels through the whole stack and into a UI; an agent
+/// rewriting a megabyte file must not turn one approval prompt into a megabyte
+/// message. What is cut is MARKED cut ([`ProposedEdit::truncated`]) so nobody
+/// approves a diff believing they saw all of it.
+const MAX_PREVIEW_BYTES: usize = 64 * 1024;
+
 /// Classifies a bridge command into a known agent family. Used for the stable
 /// `RuntimeDescriptor::id` and for the observed-coverage table.
 ///
@@ -558,6 +566,7 @@ async fn run_connection(
                         id: PermissionRequestId(id),
                         action,
                         detail,
+                        edits: proposed_edits(&shared, &request),
                     });
 
                     let spawn_shared = shared.clone();
@@ -1033,6 +1042,66 @@ fn describe_permission(request: &RequestPermissionRequest) -> (PermissionAction,
     (action, detail)
 }
 
+/// Extracts the edits a permission request would perform, from the diff blocks
+/// the agent attached to it.
+///
+/// This is the payload that makes the request decidable: `claude-agent-acp`
+/// sends `toolCall.content: [{"type":"diff", path, oldText?, newText}]` with the
+/// request, so the approver can be shown the exact bytes before anything is
+/// written. Requests with no diff block (a command, a network fetch) yield an
+/// empty list rather than an invented one.
+fn proposed_edits(shared: &Shared, request: &RequestPermissionRequest) -> Vec<ProposedEdit> {
+    let Some(content) = &request.tool_call.fields.content else {
+        return Vec::new();
+    };
+    content
+        .iter()
+        .filter_map(|block| match block {
+            ToolCallContent::Diff(Diff {
+                path,
+                old_text,
+                new_text,
+                ..
+            }) => {
+                let (new_text, new_cut) = truncate_preview(new_text);
+                let (old_text, old_cut) = match old_text {
+                    Some(text) => {
+                        let (text, cut) = truncate_preview(text);
+                        (Some(text), cut)
+                    }
+                    None => (None, false),
+                };
+                Some(ProposedEdit {
+                    // An edit aimed outside the session root keeps its absolute
+                    // path: that IS the thing the approver most needs to see.
+                    path: if shared.path_allowed(path) {
+                        relative_to_root(shared, path)
+                    } else {
+                        path.clone()
+                    },
+                    old_text,
+                    new_text,
+                    truncated: new_cut || old_cut,
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Cuts a preview at [`MAX_PREVIEW_BYTES`], on a char boundary, reporting
+/// whether anything was removed.
+fn truncate_preview(text: &str) -> (String, bool) {
+    if text.len() <= MAX_PREVIEW_BYTES {
+        return (text.to_string(), false);
+    }
+    let mut end = MAX_PREVIEW_BYTES;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    (text[..end].to_string(), true)
+}
+
 /// Turns a Bastion decision into the ACP option the agent offered.
 ///
 /// Selection is by [`PermissionOptionKind`], never by position: this bridge
@@ -1469,6 +1538,106 @@ mod tests {
         let artifact = artifact.expect("completed tool call must publish its touched file");
         assert_eq!(artifact.path, PathBuf::from("written.txt"));
         assert_eq!(artifact.digest, sha256_digest(b"HELLO"));
+    }
+
+    fn shared_rooted_at(root: &Path) -> (Shared, mpsc::UnboundedReceiver<RuntimeEvent>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (
+            Shared::new(
+                tx,
+                WorkspacePolicy {
+                    root: root.to_path_buf(),
+                    read_only: false,
+                    deny: Vec::new(),
+                },
+            ),
+            rx,
+        )
+    }
+
+    fn diff_request(path: &Path, old: Option<&str>, new: &str) -> RequestPermissionRequest {
+        let mut fields = acp::schema::v1::ToolCallUpdateFields::default();
+        fields.content = Some(vec![ToolCallContent::Diff(Diff::new(
+            path.to_path_buf(),
+            new.to_string(),
+        ))]);
+        if let Some(old) = old {
+            if let Some(ToolCallContent::Diff(diff)) =
+                fields.content.as_mut().and_then(|c| c.first_mut())
+            {
+                diff.old_text = Some(old.to_string());
+            }
+        }
+        RequestPermissionRequest::new(
+            SessionId::from("s".to_string()),
+            ToolCallUpdate::new(acp::schema::v1::ToolCallId::from("t".to_string()), fields),
+            vec![option(PermissionOptionKind::AllowOnce, "allow")],
+        )
+    }
+
+    /// The whole point: the approver sees the bytes BEFORE they are written.
+    #[test]
+    fn permission_request_carries_the_proposed_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (shared, _rx) = shared_rooted_at(dir.path());
+        let request = diff_request(&dir.path().join("a.txt"), Some("antes"), "depois");
+
+        let edits = proposed_edits(&shared, &request);
+
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].path, PathBuf::from("a.txt"));
+        assert_eq!(edits[0].old_text.as_deref(), Some("antes"));
+        assert_eq!(edits[0].new_text, "depois");
+        assert!(!edits[0].truncated);
+    }
+
+    /// A request with no diff block (a command, a fetch) reports nothing rather
+    /// than a fabricated preview.
+    #[test]
+    fn a_request_without_a_diff_reports_no_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let (shared, _rx) = shared_rooted_at(dir.path());
+        let request = permission_request(vec![option(PermissionOptionKind::AllowOnce, "allow")]);
+
+        assert!(proposed_edits(&shared, &request).is_empty());
+    }
+
+    /// An edit aimed outside the session root keeps its absolute path: that is
+    /// the single most important thing for the person deciding.
+    #[test]
+    fn an_edit_outside_the_root_keeps_its_absolute_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let (shared, _rx) = shared_rooted_at(dir.path());
+        let outside = PathBuf::from("/etc/passwd");
+        let request = diff_request(&outside, None, "pwned");
+
+        let edits = proposed_edits(&shared, &request);
+
+        assert_eq!(edits[0].path, outside, "não pode parecer um caminho local");
+    }
+
+    /// Truncation is allowed; silent truncation is not.
+    #[test]
+    fn an_oversized_preview_is_cut_and_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let (shared, _rx) = shared_rooted_at(dir.path());
+        let huge = "x".repeat(MAX_PREVIEW_BYTES + 4096);
+        let request = diff_request(&dir.path().join("big.txt"), None, &huge);
+
+        let edits = proposed_edits(&shared, &request);
+
+        assert!(edits[0].truncated);
+        assert_eq!(edits[0].new_text.len(), MAX_PREVIEW_BYTES);
+    }
+
+    /// Cutting must never split a multi-byte character into invalid UTF-8.
+    #[test]
+    fn truncation_lands_on_a_char_boundary() {
+        let text = "é".repeat(MAX_PREVIEW_BYTES);
+        let (cut, truncated) = truncate_preview(&text);
+        assert!(truncated);
+        assert!(cut.len() <= MAX_PREVIEW_BYTES);
+        assert!(text.starts_with(&cut));
     }
 
     #[test]
