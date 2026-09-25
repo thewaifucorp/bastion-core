@@ -7,43 +7,38 @@ version).
 
 ## Unreleased
 
-## 0.3.3 — 2026-08-03
+## 0.4.0 — 2026-09-25
 
-### Fixed
-
-- Blocked user turns no longer remain in session history and leak into later
-  provider requests. `AgentLoop` now removes the failed append, stores denied
-  payloads as separately retrievable audit evidence, and records an assistant
-  refusal instead. `SessionManager` gains `remove_last`,
-  `record_blocked_turn`, and `load_blocked_turn`; `bastion-runtime` advances
-  to `0.2.5` for the additive public API.
-- `bastion-providers::codex` now matches the ChatGPT Codex inference wire
-  contract: requests use SSE (`stream: true`), omit the rejected
-  `max_output_tokens` field, and collapse streamed text, tool-call items, and
-  final usage into the kernel's non-streaming `LlmResponse`.
-  `bastion-providers` advances to `0.2.4`.
-
-- **`bastion-providers::codex`'s device-code flow used the wrong endpoints —
-  a real `403` on a live E2E run.** Three values, re-derived directly from
-  `codex-rs/login/src/device_code_auth.rs`'s literal source and cross-checked
-  against a real, unrelated bug report naming the same corrected path
-  (`github.com/openai/codex` issue #16079):
-  - The device usercode/token endpoints live under `{issuer}/api/accounts/deviceauth/...`,
-    not `{issuer}/deviceauth/...` — the missing `/api/accounts` segment is
-    what produced the `403`. New `DEVICE_API_PREFIX` const.
-  - `DeviceAuthorization::verification_uri` defaults to
-    `https://auth.openai.com/codex/device` (issuer-based), not
-    `https://chatgpt.com/codex/device` as before.
-  - `CodexConfig::redirect_uri` defaults to
-    `https://auth.openai.com/deviceauth/callback` (the device flow's own
-    callback, now confirmed), not the browser-PKCE flow's
-    `http://localhost:1455/auth/callback` it was incorrectly reusing.
-  - All three were previously flagged in the module's own "Sourcing and
-    confidence" doc as unconfirmed guesses — now confirmed against official
-    source, not guessed. 2 new tests lock the corrected values down.
+Repo tag `v0.4.0`: `bastion-types` and `bastion-agent-runtime` advanced their minor.
 
 ### Added
 
+- **`bastion-agent-runtime::acp::AcpAgentRuntime` — a direct ACP adapter whose
+  permission requests Bastion actually answers.** `AcpxAgentRuntime` supervises a
+  third-party ACP client, so `session/request_permission` is resolved inside it
+  before Bastion sees it (`approvals = HarnessOwned`). The new adapter speaks ACP
+  JSON-RPC over stdio to the bridge directly, on Zed's official
+  `agent-client-protocol` SDK (pinned exactly). Everything its `descriptor()`
+  declares was measured live with `examples/acp_fs_probe.rs`:
+  - filesystem delegation is advertised and ignored by every bridge tested
+    (`claude-agent-acp@0.70.0`, `codex-acp@0.0.44`, `opencode acp`); the `fs/*`
+    handlers stay, root-confined;
+  - `approvals` is per bridge: Claude asks before editing, Codex and OpenCode
+    resolve internally and never ask;
+  - permission options arrive deny-first, so decisions map by
+    `PermissionOptionKind` and a missing kind is an error, never a guess.
+  Against `claude-agent-acp@0.70.0`, 11 conformance checks pass (including
+  `permission_bridge_allow`/`permission_bridge_deny`) and 3 skip for lack of
+  fault injection. Declared as is: `sandbox = None`, `egress = HarnessOwned`,
+  `resume`/`steer` false.
+- **`RuntimeEvent::PermissionRequest` carries the proposed diff.** New
+  `ProposedEdit { path, old_text, new_text, truncated }` in the `edits` field
+  (`#[serde(default)]`, so older payloads still deserialize). Requests without a
+  diff block report an empty list, never an invented preview; edits outside the
+  session root keep their absolute path; previews are cut at 64KB per side on a
+  char boundary and marked `truncated`. `acpx` and `codex` report an empty list.
+  Adding a field to a variant breaks exhaustive matches, so
+  `bastion-agent-runtime` advances to `0.2.0`.
 - **Real STABLE/VOLATILE system-prompt caching for Anthropic (D-12/D-14b), plus the
   missing regression test.** Root cause found while wiring a downstream host's
   per-turn context block (an opaque `TurnContextProvider` — SEAM #2's own
@@ -99,11 +94,51 @@ version).
     just count-dependent), and the zero-`context_providers` case. Plus 14 new
     unit tests across `anthropic.rs` (split/fallback/char-boundary safety) and
     `runner.rs`/`responder.rs` covering the persona-override boundary logic.
-  - Additive, per `docs/VERSIONING.md` §1: new field with a safe `Default`, new
-    trait methods with defaults, one new pub fn — no existing signature
-    changed. `bastion-types` advances to `0.2.3`, `bastion-runtime` to `0.2.5`,
-    `bastion-cognition` to `0.2.1`, `bastion-personas` to `0.2.2`,
-    `bastion-providers` to `0.2.4`.
+  - Version impact: the new trait methods have defaults and the new pub fn is
+    additive, but `CallConfig` gained a public field and has no
+    `#[non_exhaustive]`, so a downstream struct literal without
+    `..Default::default()` stops compiling. Per `docs/VERSIONING.md` §3 that is
+    breaking, the same reasoning that moved `bastion-agent-runtime` to `0.2.0`
+    below: `bastion-types` advances to `0.3.0`. `bastion-runtime` advances to
+    `0.2.6`, `bastion-cognition` to `0.2.1`, `bastion-personas` to `0.2.2`,
+    `bastion-providers` to `0.2.5`.
+## 0.3.3 — 2026-08-03
+
+### Fixed
+
+- Blocked user turns no longer remain in session history and leak into later
+  provider requests. `AgentLoop` now removes the failed append, stores denied
+  payloads as separately retrievable audit evidence, and records an assistant
+  refusal instead. `SessionManager` gains `remove_last`,
+  `record_blocked_turn`, and `load_blocked_turn`; `bastion-runtime` advances
+  to `0.2.5` for the additive public API.
+- `bastion-providers::codex` now matches the ChatGPT Codex inference wire
+  contract: requests use SSE (`stream: true`), omit the rejected
+  `max_output_tokens` field, and collapse streamed text, tool-call items, and
+  final usage into the kernel's non-streaming `LlmResponse`.
+  `bastion-providers` advances to `0.2.4`.
+
+- **`bastion-providers::codex`'s device-code flow used the wrong endpoints —
+  a real `403` on a live E2E run.** Three values, re-derived directly from
+  `codex-rs/login/src/device_code_auth.rs`'s literal source and cross-checked
+  against a real, unrelated bug report naming the same corrected path
+  (`github.com/openai/codex` issue #16079):
+  - The device usercode/token endpoints live under `{issuer}/api/accounts/deviceauth/...`,
+    not `{issuer}/deviceauth/...` — the missing `/api/accounts` segment is
+    what produced the `403`. New `DEVICE_API_PREFIX` const.
+  - `DeviceAuthorization::verification_uri` defaults to
+    `https://auth.openai.com/codex/device` (issuer-based), not
+    `https://chatgpt.com/codex/device` as before.
+  - `CodexConfig::redirect_uri` defaults to
+    `https://auth.openai.com/deviceauth/callback` (the device flow's own
+    callback, now confirmed), not the browser-PKCE flow's
+    `http://localhost:1455/auth/callback` it was incorrectly reusing.
+  - All three were previously flagged in the module's own "Sourcing and
+    confidence" doc as unconfirmed guesses — now confirmed against official
+    source, not guessed. 2 new tests lock the corrected values down.
+
+### Added
+
 - `bastion-agent-runtime` advances to `0.1.1` with the optional, wire-compatible
   `model_hint` on `SessionSpec` and `TaskInput`, allowing delegated coding
   runtimes to receive the model selected by host routing while preserving the
