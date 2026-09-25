@@ -136,9 +136,10 @@ pub struct CodexConfig {
     pub api_base: String,
     /// The device flow's own callback, `{issuer}/deviceauth/callback` —
     /// confirmed via `codex-rs/login/src/device_code_auth.rs` (see the
-    /// module doc's 2026-08-01 update). Distinct from the browser PKCE
-    /// flow's `http://localhost:{port}/auth/callback`, which this module
-    /// does not implement.
+    /// module doc's 2026-08-01 update). Only the device flow uses it: the
+    /// browser flow's loopback redirect is per-login
+    /// ([`BrowserAuthorization::redirect_uri`], see
+    /// [`start_browser_authorization`]).
     pub redirect_uri: String,
     /// Shown to the operator alongside the user code during device login.
     /// `{issuer}/codex/device` — confirmed via `codex-rs/login/src/device_code_auth.rs`
@@ -282,6 +283,133 @@ pub async fn poll_device_authorization(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Browser login (authorization code + PKCE over a loopback callback) — the
+// desktop alternative to the device flow above. Every literal below is read
+// from `codex-rs/login/src/server.rs` and `codex-rs/login/src/oauth/
+// authorization.rs` (openai/codex main, 2026-09-25). This module builds the
+// request and exchanges the code; listening on the loopback port is the
+// host's job, since Core runs no server of its own.
+// ---------------------------------------------------------------------------
+
+/// `codex-rs/login/src/server.rs`: `const DEFAULT_PORT: u16 = 1455;`.
+pub const BROWSER_CALLBACK_PORT: u16 = 1455;
+
+/// `codex-rs/login/src/server.rs`: `const FALLBACK_PORT: u16 = 1457;` — "Keep
+/// in sync with the Codex CLI Hydra redirect URI allow-list". The authorize
+/// endpoint rejects any other port, so a host that finds both taken must fail
+/// rather than pick a free one.
+pub const BROWSER_CALLBACK_FALLBACK_PORT: u16 = 1457;
+
+/// `codex-rs/login/src/server.rs`: the callback path on the loopback server.
+pub const BROWSER_CALLBACK_PATH: &str = "/auth/callback";
+
+/// `codex-rs/login/src/oauth/authorization.rs`: the exact scope string.
+pub const BROWSER_SCOPE: &str =
+    "openid profile email offline_access api.connectors.read api.connectors.invoke";
+
+/// `codex-rs/login/src/auth/default_client.rs`: `DEFAULT_ORIGINATOR`.
+pub const BROWSER_ORIGINATOR: &str = "codex_cli_rs";
+
+/// The loopback redirect for `port`. `codex-rs` uses `127.0.0.1`, not
+/// `localhost`, and the authorize endpoint compares the string exactly.
+pub fn browser_redirect_uri(port: u16) -> String {
+    format!("http://127.0.0.1:{port}{BROWSER_CALLBACK_PATH}")
+}
+
+/// One in-flight browser login: the URL to open, plus what the host needs to
+/// check the callback and finish the exchange. `Debug` redacts the verifier
+/// and the state — either one, together with the code the callback carries,
+/// is enough to complete someone else's login.
+pub struct BrowserAuthorization {
+    pub authorize_url: String,
+    pub redirect_uri: String,
+    state: SecretValue,
+    code_verifier: SecretValue,
+}
+
+impl BrowserAuthorization {
+    /// Exact comparison, as `codex-rs`'s `validate()` does, and before the
+    /// host looks at `code` or `error`: a callback whose state does not match
+    /// is not ours and must not be acted on.
+    pub fn state_matches(&self, received: &str) -> bool {
+        let expected = self.state.expose_secret().as_bytes();
+        let received = received.as_bytes();
+        // Length leaks nothing (the state has a fixed length); the byte loop
+        // avoids an early exit on the first mismatch.
+        expected.len() == received.len()
+            && expected
+                .iter()
+                .zip(received)
+                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+                == 0
+    }
+}
+
+impl std::fmt::Debug for BrowserAuthorization {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BrowserAuthorization")
+            .field(
+                "authorize_url",
+                &"[redacted: carries the PKCE challenge and state]",
+            )
+            .field("redirect_uri", &self.redirect_uri)
+            .finish_non_exhaustive()
+    }
+}
+
+/// `n` random bytes from the OS, base64url without padding — the encoding
+/// `codex-rs` uses for both the verifier (64 bytes) and the state (32).
+fn random_urlsafe(n: usize) -> String {
+    use rand::RngCore;
+    let mut bytes = vec![0u8; n];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+/// S256: base64url(SHA-256(verifier)), no padding (RFC 7636 §4.2).
+fn pkce_challenge(verifier: &str) -> String {
+    use sha2::{Digest, Sha256};
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
+}
+
+/// Build a browser login for a callback already bound on `port` (one of
+/// [`BROWSER_CALLBACK_PORT`] or [`BROWSER_CALLBACK_FALLBACK_PORT`]). The
+/// parameters and their order follow `codex-rs`'s authorize request; no
+/// `resource` parameter is sent, as there. Fails only when the configured
+/// issuer is not a URL.
+pub fn start_browser_authorization(
+    config: &CodexConfig,
+    port: u16,
+) -> anyhow::Result<BrowserAuthorization> {
+    let code_verifier = random_urlsafe(64);
+    let state = random_urlsafe(32);
+    let redirect_uri = browser_redirect_uri(port);
+    let authorize_url = reqwest::Url::parse_with_params(
+        &format!("{}/oauth/authorize", config.issuer.trim_end_matches('/')),
+        &[
+            ("response_type", "code"),
+            ("client_id", config.client_id.as_str()),
+            ("redirect_uri", redirect_uri.as_str()),
+            ("code_challenge", pkce_challenge(&code_verifier).as_str()),
+            ("code_challenge_method", "S256"),
+            ("state", state.as_str()),
+            ("scope", BROWSER_SCOPE),
+            ("id_token_add_organizations", "true"),
+            ("codex_cli_simplified_flow", "true"),
+            ("originator", BROWSER_ORIGINATOR),
+        ],
+    )
+    .map_err(|e| anyhow::anyhow!("invalid Codex issuer {:?}: {e}", config.issuer))?
+    .into();
+    Ok(BrowserAuthorization {
+        authorize_url,
+        redirect_uri,
+        state: SecretValue::new(state),
+        code_verifier: SecretValue::new(code_verifier),
+    })
+}
+
 /// Step 3: exchange the `authorization_code` the poll above returned for
 /// real tokens, against the SAME `/oauth/token` endpoint the refresher below
 /// uses (standard `authorization_code` + PKCE grant, `codex-rs/login/src/server.rs`).
@@ -291,12 +419,52 @@ pub async fn exchange_authorization_code(
     authorization_code: &str,
     code_verifier: &str,
 ) -> Result<CodexTokenRecord, ProviderAuthError> {
+    exchange_code(
+        http,
+        config,
+        authorization_code,
+        code_verifier,
+        &config.redirect_uri,
+    )
+    .await
+}
+
+/// The browser flow's counterpart to [`exchange_authorization_code`]: same
+/// grant against the same `/oauth/token`, but the `redirect_uri` has to be the
+/// loopback one the authorize request carried
+/// ([`BrowserAuthorization::redirect_uri`]), not the device flow's
+/// `{issuer}/deviceauth/callback` that [`CodexConfig::redirect_uri`] holds.
+/// `codex-rs` shares one `exchange_code_for_tokens` between both flows and
+/// differs only in that argument.
+pub async fn exchange_browser_authorization_code(
+    http: &reqwest::Client,
+    config: &CodexConfig,
+    authorization: &BrowserAuthorization,
+    authorization_code: &str,
+) -> Result<CodexTokenRecord, ProviderAuthError> {
+    exchange_code(
+        http,
+        config,
+        authorization_code,
+        authorization.code_verifier.expose_secret(),
+        &authorization.redirect_uri,
+    )
+    .await
+}
+
+async fn exchange_code(
+    http: &reqwest::Client,
+    config: &CodexConfig,
+    authorization_code: &str,
+    code_verifier: &str,
+    redirect_uri: &str,
+) -> Result<CodexTokenRecord, ProviderAuthError> {
     let resp = http
         .post(config.token_url())
         .form(&[
             ("grant_type", "authorization_code"),
             ("code", authorization_code),
-            ("redirect_uri", &config.redirect_uri),
+            ("redirect_uri", redirect_uri),
             ("client_id", &config.client_id),
             ("code_verifier", code_verifier),
         ])
@@ -574,7 +742,7 @@ fn codex_tools_from_anthropic(tools: &[Value]) -> Vec<Value> {
     tools
         .iter()
         .filter_map(|t| {
-            let name = t.get("name")?.as_str()?.to_owned();
+            let name = to_wire_tool_name(t.get("name")?.as_str()?);
             Some(json!({
                 "type": "function",
                 "name": name,
@@ -585,9 +753,38 @@ fn codex_tools_from_anthropic(tools: &[Value]) -> Vec<Value> {
         .collect()
 }
 
+/// Function names the Responses backends refuse for a user-defined tool —
+/// both `chatgpt.com/backend-api/codex` and `api.openai.com` answer
+/// `HTTP 400: Invalid Value: 'tools'. Function 'tool_search.tool_search' not
+/// allowed in reserved namespace 'tool_search'.` (hermes-agent#83122, fixed
+/// the same way in hermes-agent#115855). One such tool in the registry would
+/// otherwise fail every turn, not just the calls to it.
+const RESERVED_TOOL_NAMES: &[&str] = &["tool_search"];
+
+/// Prefix a reserved name gets on the wire. Reversed on the way back by
+/// [`from_wire_tool_name`], so the registry only ever sees its own names.
+const RESERVED_TOOL_PREFIX: &str = "bastion_";
+
+fn to_wire_tool_name(name: &str) -> String {
+    if RESERVED_TOOL_NAMES.contains(&name) {
+        format!("{RESERVED_TOOL_PREFIX}{name}")
+    } else {
+        name.to_owned()
+    }
+}
+
+fn from_wire_tool_name(name: &str) -> String {
+    match name.strip_prefix(RESERVED_TOOL_PREFIX) {
+        Some(original) if RESERVED_TOOL_NAMES.contains(&original) => original.to_owned(),
+        _ => name.to_owned(),
+    }
+}
+
 fn codex_tool_choice(choice: Option<&crate::types::ToolChoice>) -> Value {
     match choice {
-        Some(crate::types::ToolChoice::Forced(name)) => json!({"type": "function", "name": name}),
+        Some(crate::types::ToolChoice::Forced(name)) => {
+            json!({"type": "function", "name": to_wire_tool_name(name)})
+        }
         Some(crate::types::ToolChoice::Required) => json!("required"),
         Some(crate::types::ToolChoice::Auto) | None => json!("auto"),
     }
@@ -645,7 +842,7 @@ fn parse_codex_response(body: &Value) -> LlmResponse {
                     }
                 }
                 Some("function_call") => {
-                    let name = item["name"].as_str().unwrap_or_default().to_string();
+                    let name = from_wire_tool_name(item["name"].as_str().unwrap_or_default());
                     let arguments = item["arguments"]
                         .as_str()
                         .and_then(|s| serde_json::from_str(s).ok())
@@ -819,7 +1016,9 @@ impl Provider for CodexProvider {
 
 /// `Experimental`, `DeviceCode` auth flow — the only entry point
 /// [`ProviderSupportDescriptor`] offers (BPCONF-05); nothing here can claim
-/// `Supported`.
+/// `Supported`. The descriptor names one flow, so it names the default that
+/// works headless; the browser flow ([`start_browser_authorization`]) is an
+/// alternative the host opts into, against the same token endpoint.
 pub fn support_descriptor() -> ProviderSupportDescriptor {
     ProviderSupportDescriptor::experimental(CODEX_PROVIDER_ID, ProviderAuthFlow::DeviceCode)
 }
@@ -828,6 +1027,150 @@ pub fn support_descriptor() -> ProviderSupportDescriptor {
 mod tests {
     use super::*;
     use crate::types::{ContentPart, ToolChoice};
+
+    fn query_params(url: &str) -> Vec<(String, String)> {
+        reqwest::Url::parse(url)
+            .expect("authorize url parses")
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn browser_authorization_sends_the_codex_rs_parameters_in_order() {
+        let auth = start_browser_authorization(&CodexConfig::default(), BROWSER_CALLBACK_PORT)
+            .expect("default issuer is a URL");
+        assert!(auth
+            .authorize_url
+            .starts_with("https://auth.openai.com/oauth/authorize?"));
+        assert_eq!(auth.redirect_uri, "http://127.0.0.1:1455/auth/callback");
+
+        let params = query_params(&auth.authorize_url);
+        let keys: Vec<&str> = params.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                "response_type",
+                "client_id",
+                "redirect_uri",
+                "code_challenge",
+                "code_challenge_method",
+                "state",
+                "scope",
+                "id_token_add_organizations",
+                "codex_cli_simplified_flow",
+                "originator",
+            ]
+        );
+        let get = |key: &str| {
+            params
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.as_str())
+                .unwrap_or_default()
+                .to_owned()
+        };
+        assert_eq!(get("response_type"), "code");
+        assert_eq!(get("client_id"), DEFAULT_CLIENT_ID);
+        assert_eq!(get("redirect_uri"), auth.redirect_uri);
+        assert_eq!(get("code_challenge_method"), "S256");
+        assert_eq!(get("scope"), BROWSER_SCOPE);
+        assert_eq!(get("id_token_add_organizations"), "true");
+        assert_eq!(get("codex_cli_simplified_flow"), "true");
+        assert_eq!(get("originator"), "codex_cli_rs");
+        assert!(auth.state_matches(&get("state")));
+        assert_eq!(
+            get("code_challenge"),
+            pkce_challenge(auth.code_verifier.expose_secret())
+        );
+    }
+
+    #[test]
+    fn browser_authorization_uses_the_fallback_port_in_the_redirect() {
+        let auth =
+            start_browser_authorization(&CodexConfig::default(), BROWSER_CALLBACK_FALLBACK_PORT)
+                .expect("default issuer is a URL");
+        assert_eq!(auth.redirect_uri, "http://127.0.0.1:1457/auth/callback");
+    }
+
+    #[test]
+    fn browser_authorization_rejects_an_issuer_that_is_not_a_url() {
+        let config = CodexConfig {
+            issuer: "not a url".into(),
+            ..CodexConfig::default()
+        };
+        assert!(start_browser_authorization(&config, BROWSER_CALLBACK_PORT).is_err());
+    }
+
+    #[test]
+    fn pkce_verifier_and_state_have_the_codex_rs_lengths_and_differ_per_login() {
+        let a = start_browser_authorization(&CodexConfig::default(), BROWSER_CALLBACK_PORT)
+            .expect("url");
+        let b = start_browser_authorization(&CodexConfig::default(), BROWSER_CALLBACK_PORT)
+            .expect("url");
+        // 64 bytes and 32 bytes, base64url without padding.
+        assert_eq!(a.code_verifier.expose_secret().len(), 86);
+        assert_eq!(a.state.expose_secret().len(), 43);
+        assert_ne!(
+            a.code_verifier.expose_secret(),
+            b.code_verifier.expose_secret()
+        );
+        assert_ne!(a.state.expose_secret(), b.state.expose_secret());
+    }
+
+    #[test]
+    fn pkce_challenge_matches_the_rfc_7636_example() {
+        // RFC 7636 Appendix B.
+        assert_eq!(
+            pkce_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        );
+    }
+
+    #[test]
+    fn state_matches_only_the_exact_value() {
+        let auth = start_browser_authorization(&CodexConfig::default(), BROWSER_CALLBACK_PORT)
+            .expect("url");
+        let state = auth.state.expose_secret().to_owned();
+        assert!(auth.state_matches(&state));
+        assert!(!auth.state_matches(""));
+        assert!(!auth.state_matches(&state[..state.len() - 1]));
+        assert!(!auth.state_matches(&format!("{state}x")));
+    }
+
+    #[test]
+    fn browser_authorization_debug_hides_the_verifier_and_state() {
+        let auth = start_browser_authorization(&CodexConfig::default(), BROWSER_CALLBACK_PORT)
+            .expect("url");
+        let rendered = format!("{auth:?}");
+        assert!(!rendered.contains(auth.code_verifier.expose_secret()));
+        assert!(!rendered.contains(auth.state.expose_secret()));
+        assert!(!rendered.contains("code_challenge="));
+    }
+
+    #[test]
+    fn reserved_tool_names_are_renamed_on_the_wire_and_restored_on_the_way_back() {
+        let wire = codex_tools_from_anthropic(&[
+            json!({"name": "tool_search", "description": "d", "input_schema": {"type": "object"}}),
+            json!({"name": "read_file", "description": "d", "input_schema": {"type": "object"}}),
+        ]);
+        assert_eq!(wire[0]["name"], "bastion_tool_search");
+        assert_eq!(wire[1]["name"], "read_file");
+        assert_eq!(
+            codex_tool_choice(Some(&ToolChoice::Forced("tool_search".into()))),
+            json!({"type": "function", "name": "bastion_tool_search"})
+        );
+
+        let resp = parse_codex_response(&json!({"output": [
+            {"type": "function_call", "call_id": "c1", "name": "bastion_tool_search", "arguments": "{}"},
+            {"type": "function_call", "call_id": "c2", "name": "bastion_read_file", "arguments": "{}"},
+        ]}));
+        let calls = resp.tool_calls.expect("two tool calls");
+        assert_eq!(calls[0].name, "tool_search");
+        // Only names that were actually renamed are restored: a tool that is
+        // genuinely called `bastion_read_file` keeps its name.
+        assert_eq!(calls[1].name, "bastion_read_file");
+    }
 
     #[test]
     fn config_urls_are_built_from_the_confirmed_paths() {

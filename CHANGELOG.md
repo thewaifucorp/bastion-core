@@ -7,6 +7,35 @@ version).
 
 ## Unreleased
 
+### Added
+
+- **`bastion-providers::codex` — browser login (authorization code + PKCE over a
+  loopback callback)**, the desktop alternative to the device flow.
+  `start_browser_authorization(config, port)` builds the authorize request with
+  the literals of `codex-rs/login/src/{server.rs,oauth/authorization.rs}`
+  (`/oauth/authorize`, scope `openid profile email offline_access
+  api.connectors.read api.connectors.invoke`, `originator=codex_cli_rs`, S256
+  challenge over a 64-byte verifier, 32-byte state, redirect
+  `http://127.0.0.1:{port}/auth/callback`). `BROWSER_CALLBACK_PORT` (1455) and
+  `BROWSER_CALLBACK_FALLBACK_PORT` (1457) are the only ports the authorize
+  endpoint accepts. `BrowserAuthorization::state_matches` compares exactly, and
+  its `Debug` redacts the verifier, the state and the URL that carries them.
+  `exchange_browser_authorization_code` exchanges against the same
+  `/oauth/token` with the loopback `redirect_uri`. Core binds nothing: the host
+  runs the callback listener.
+
+### Fixed
+
+- **`bastion-providers::codex` renames reserved tool names on the wire.** Both
+  `chatgpt.com/backend-api/codex` and `api.openai.com` reject a user-defined
+  function called `tool_search` (`HTTP 400: Function 'tool_search.tool_search'
+  not allowed in reserved namespace 'tool_search'`), which fails every turn of a
+  registry that has one, not just the calls to it. It now goes out as
+  `bastion_tool_search` in the tool list and a forced `tool_choice`, and tool
+  calls come back under the original name; a tool genuinely named
+  `bastion_<x>` for a non-reserved `<x>` is left alone.
+- `bastion-providers` advances to `0.2.6` (additive public API).
+
 ## 0.4.0 — 2026-09-25
 
 Repo tag `v0.4.0`: `bastion-types` and `bastion-agent-runtime` advanced their minor.
