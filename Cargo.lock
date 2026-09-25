@@ -554,7 +554,7 @@ dependencies = [
 
 [[package]]
 name = "bastion-providers"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "async-openai",
@@ -575,7 +575,7 @@ dependencies = [
 
 [[package]]
 name = "bastion-runtime"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -596,7 +596,7 @@ dependencies = [
 
 [[package]]
 name = "bastion-types"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "schemars 0.8.22",
