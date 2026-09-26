@@ -52,6 +52,7 @@ mod agent/mod.rs:context
 mod agent/mod.rs:handle
 mod agent/mod.rs:loop_
 mod agent/mod.rs:ports
+mod agent/mod.rs:runtime_turn
 trait agent/ports.rs:ApprovalGate
 trait agent/ports.rs:AuthResolver
 trait agent/ports.rs:CommandHandler
@@ -70,6 +71,11 @@ trait agent/ports.rs:ToolResultObserver
 trait agent/ports.rs:ToolSource
 struct agent/ports.rs:TurnContext
 trait agent/ports.rs:TurnKernel
+const agent/runtime_turn.rs:DEFAULT_RUNTIME_SESSION_IDLE
+struct agent/runtime_turn.rs:LiveRuntimeSession
+type agent/runtime_turn.rs:RuntimeMcpBridge
+fn agent/runtime_turn.rs:with_runtime_mcp_bridge
+fn agent/runtime_turn.rs:with_runtime_session_idle
 use capability/approval.rs:ApprovalOutcome
 use capability/approval.rs:ApprovalRow
 use capability/approval.rs:ApprovalStatus

@@ -54,6 +54,7 @@ struct lib.rs:EnvPolicy
 use lib.rs:HarnessConfinement
 use lib.rs:HarnessLaunch
 struct lib.rs:McpBridgeSpec
+enum lib.rs:McpServerEndpoint
 struct lib.rs:OtelContext
 enum lib.rs:PermissionAction
 enum lib.rs:PermissionDecision
@@ -88,4 +89,5 @@ mod lib.rs:acpx
 mod lib.rs:codex
 mod lib.rs:confine
 mod lib.rs:conformance
+fn lib.rs:name
 use lib.rs:owner_workspace
