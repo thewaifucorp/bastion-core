@@ -45,6 +45,7 @@ fn agent/loop_.rs:with_deployment_context
 fn agent/loop_.rs:with_permission_gate
 fn agent/loop_.rs:with_permission_timeout
 fn agent/loop_.rs:with_runtime_registry
+fn agent/loop_.rs:with_runtime_workspace_base
 mod agent/mod.rs:backend
 mod agent/mod.rs:compactor
 mod agent/mod.rs:context
