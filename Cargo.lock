@@ -554,7 +554,7 @@ dependencies = [
 
 [[package]]
 name = "bastion-providers"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "async-openai",
