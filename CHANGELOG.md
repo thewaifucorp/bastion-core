@@ -7,6 +7,12 @@ version).
 
 ## Unreleased
 
+## 0.5.0 — 2026-09-26
+
+Repo tag `v0.5.0`. `bastion-runtime` 0.2.6 → 0.3.0 (new public field) sets
+the minor; also `bastion-sandbox` 0.1.0 (new crate), `bastion-agent-runtime`
+0.2.0 → 0.2.1 and `bastion-mcp` 0.2.0 → 0.2.1 (additive).
+
 ### Added
 
 - **`bastion-sandbox` 0.1.0 — OS-level confinement for host programs.** A
