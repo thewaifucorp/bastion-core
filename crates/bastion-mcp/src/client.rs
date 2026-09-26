@@ -100,6 +100,7 @@ impl McpClient {
                     connect_stdio(
                         &command,
                         &args.iter().map(String::as_str).collect::<Vec<_>>(),
+                        &StdioLaunch::from_server_cfg(server_cfg),
                     )
                     .await
                 }
@@ -319,13 +320,74 @@ fn composio_toolkit_from_label(label: &str) -> Option<&str> {
         .or(Some(label))
 }
 
+/// Variables a stdio server gets without being asked for: enough to find its
+/// interpreter (`PATH`), its caches (`HOME`, `TMPDIR`) and a locale. Anything
+/// else — tokens, cloud credentials, the daemon's own secrets — stays out
+/// unless `[mcp.servers.<name>]` names it.
+const STDIO_BASE_ENV: &[&str] = &["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"];
+
+/// How one stdio server is launched, from its `[mcp.servers.<name>]` table:
+///
+/// - `env = { KEY = "value" }` — set literally;
+/// - `env_passthrough = ["GITHUB_TOKEN"]` — copied from the daemon's
+///   environment when present;
+/// - `cwd = "/path"` — working directory; absent keeps the daemon's.
+///
+/// The child starts from an EMPTY environment plus [`STDIO_BASE_ENV`] and the
+/// two lists above. Before this, it inherited the daemon's whole environment,
+/// so every stdio server could read every secret the daemon was started with.
+#[derive(Debug, Default, PartialEq)]
+struct StdioLaunch {
+    env: std::collections::BTreeMap<String, String>,
+    cwd: Option<std::path::PathBuf>,
+}
+
+impl StdioLaunch {
+    fn from_server_cfg(server_cfg: &Value) -> Self {
+        Self::resolve(server_cfg, |key| std::env::var(key).ok())
+    }
+
+    /// `lookup` stands in for the process environment, so the policy is
+    /// testable without mutating it.
+    fn resolve(server_cfg: &Value, lookup: impl Fn(&str) -> Option<String>) -> Self {
+        let mut env = std::collections::BTreeMap::new();
+        let passthrough = server_cfg
+            .get("env_passthrough")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str);
+        for key in STDIO_BASE_ENV.iter().copied().chain(passthrough) {
+            if let Some(value) = lookup(key) {
+                env.insert(key.to_owned(), value);
+            }
+        }
+        if let Some(literal) = server_cfg.get("env").and_then(Value::as_object) {
+            for (key, value) in literal {
+                if let Some(value) = value.as_str() {
+                    env.insert(key.clone(), value.to_owned());
+                }
+            }
+        }
+        let cwd = server_cfg
+            .get("cwd")
+            .and_then(Value::as_str)
+            .map(std::path::PathBuf::from);
+        Self { env, cwd }
+    }
+}
+
 async fn connect_stdio(
     command: &str,
     args: &[&str],
+    launch: &StdioLaunch,
 ) -> anyhow::Result<RunningService<RoleClient, ()>> {
     use rmcp::transport::TokioChildProcess;
     let mut cmd = tokio::process::Command::new(command);
-    cmd.args(args);
+    cmd.args(args).env_clear().envs(&launch.env);
+    if let Some(cwd) = &launch.cwd {
+        cmd.current_dir(cwd);
+    }
     let transport = TokioChildProcess::new(cmd)?;
     let service: RunningService<RoleClient, ()> = ().serve(transport).await?;
     Ok(service)
@@ -357,9 +419,39 @@ async fn connect_sse(
             _ => tracing::warn!(header = %name, "invalid custom header name/value, skipping"),
         }
     }
-    let transport = StreamableHttpClientTransport::from_config(config);
+    let transport = match unix_socket_path(uri) {
+        Some(socket) => {
+            // Same streamable-HTTP protocol, carried over a Unix socket: no
+            // TCP port, so nothing but a process that can open the socket
+            // file (its directory is 0700) reaches the server. The host part
+            // is ignored by the socket connector; the path is MCP's `/mcp`.
+            config.uri = UNIX_SOCKET_MCP_URI.into();
+            let client = reqwest::Client::builder()
+                .unix_socket(socket)
+                .build()
+                .map_err(|e| anyhow::anyhow!("MCP unix socket client for {uri}: {e}"))?;
+            StreamableHttpClientTransport::with_client(client, config)
+        }
+        None => StreamableHttpClientTransport::from_config(config),
+    };
     let service: RunningService<RoleClient, ()> = ().serve(transport).await?;
     Ok(service)
+}
+
+/// Scheme for an MCP server listening on a Unix socket:
+/// `url = "unix:/abs/path/server.sock"` in `[mcp.servers.<name>]`.
+pub const UNIX_SOCKET_SCHEME: &str = "unix:";
+
+/// The HTTP URI requested over the socket.
+const UNIX_SOCKET_MCP_URI: &str = "http://localhost/mcp";
+
+/// The socket path of a `unix:` server URL. Only absolute paths: a relative
+/// one would resolve against the daemon's working directory, which is not
+/// where a sidecar put its socket.
+fn unix_socket_path(uri: &str) -> Option<std::path::PathBuf> {
+    let path = uri.strip_prefix(UNIX_SOCKET_SCHEME)?;
+    let path = std::path::Path::new(path);
+    path.is_absolute().then(|| path.to_path_buf())
 }
 
 /// Resolve a config string that may reference an env var as `${VAR_NAME}`.
@@ -384,6 +476,68 @@ fn resolve_secret(raw: Option<&str>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::StdioLaunch;
+
+    #[test]
+    fn unix_socket_urls_need_an_absolute_path() {
+        assert_eq!(
+            super::unix_socket_path("unix:/run/bastion/mem.sock"),
+            Some(std::path::PathBuf::from("/run/bastion/mem.sock"))
+        );
+        assert_eq!(super::unix_socket_path("unix:relative.sock"), None);
+        assert_eq!(super::unix_socket_path("http://localhost:8001/mcp"), None);
+    }
+
+    fn fake_env(key: &str) -> Option<String> {
+        match key {
+            "PATH" => Some("/usr/bin".into()),
+            "HOME" => Some("/home/op".into()),
+            "GITHUB_TOKEN" => Some("gh-secret".into()),
+            "AWS_SECRET_ACCESS_KEY" => Some("aws-secret".into()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn stdio_child_gets_only_the_base_env_by_default() {
+        let launch = StdioLaunch::resolve(&serde_json::json!({"command": "srv"}), fake_env);
+        assert_eq!(
+            launch.env.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["HOME", "PATH"]
+        );
+        assert!(!launch.env.values().any(|v| v.contains("secret")));
+        assert_eq!(launch.cwd, None);
+    }
+
+    #[test]
+    fn stdio_child_gets_named_passthrough_and_literal_env() {
+        let launch = StdioLaunch::resolve(
+            &serde_json::json!({
+                "command": "srv",
+                "env_passthrough": ["GITHUB_TOKEN", "NOT_SET_ANYWHERE"],
+                "env": {"LOG_LEVEL": "debug", "PATH": "/opt/srv/bin"},
+                "cwd": "/work"
+            }),
+            fake_env,
+        );
+        assert_eq!(
+            launch.env.get("GITHUB_TOKEN").map(String::as_str),
+            Some("gh-secret")
+        );
+        assert_eq!(
+            launch.env.get("LOG_LEVEL").map(String::as_str),
+            Some("debug")
+        );
+        // A literal wins over the inherited value of the same name.
+        assert_eq!(
+            launch.env.get("PATH").map(String::as_str),
+            Some("/opt/srv/bin")
+        );
+        assert!(!launch.env.contains_key("NOT_SET_ANYWHERE"));
+        assert!(!launch.env.contains_key("AWS_SECRET_ACCESS_KEY"));
+        assert_eq!(launch.cwd, Some(std::path::PathBuf::from("/work")));
+    }
+
     use super::*;
     use rmcp::model::CallToolResult;
     use rmcp::service::{MaybeSendFuture, RequestContext, RoleServer};

@@ -1,6 +1,6 @@
 [package]
 name    = "bastion-agent-runtime"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 
 [lints.rust]
@@ -10,6 +10,7 @@ unsafe_code = "forbid"
 all = "warn"
 
 [dependencies]
+bastion-sandbox = { path = "../bastion-sandbox" }
 serde       = { version = "1", features = ["derive"] }
 serde_json  = "1"
 thiserror   = "2"
@@ -27,3 +28,11 @@ agent-client-protocol = "=2.0.0"
 [dev-dependencies]
 tokio     = { version = "1", features = ["time", "fs", "sync", "macros", "rt", "rt-multi-thread", "process", "io-util", "test-util"] }
 tempfile  = "3"
+
+# Custom main: the test binary doubles as the sandbox helper (it forwards
+# `__bastion-sandbox` to `bastion_sandbox::helper_main`), exactly the way a
+# host binary does.
+[[test]]
+name    = "harness_confinement"
+harness = false
+

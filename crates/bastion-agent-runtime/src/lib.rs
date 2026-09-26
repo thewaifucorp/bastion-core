@@ -28,7 +28,9 @@
 pub mod acp;
 pub mod acpx;
 pub mod codex;
+pub mod confine;
 pub mod conformance;
+pub use confine::{owner_workspace, HarnessConfinement, HarnessLaunch};
 mod util;
 
 use serde::{Deserialize, Serialize};

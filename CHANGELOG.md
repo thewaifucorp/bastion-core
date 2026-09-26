@@ -7,6 +7,85 @@ version).
 
 ## Unreleased
 
+## 0.5.0 — 2026-09-26
+
+Repo tag `v0.5.0`. `bastion-runtime` 0.2.6 → 0.3.0 (new public field) sets
+the minor; also `bastion-sandbox` 0.1.0 (new crate), `bastion-agent-runtime`
+0.2.0 → 0.2.1 and `bastion-mcp` 0.2.0 → 0.2.1 (additive).
+
+### Added
+
+- **`bastion-sandbox` 0.1.0 — OS-level confinement for host programs.** A
+  `SandboxSpec` (program, exact environment, cwd, read-only paths, writable
+  paths, network blocked or allowed) runs confined; every path not granted is
+  out of reach, the operator's home included. `Sandbox::detect(helper)` picks
+  the backend by running a confined program:
+  - **bubblewrap** (Linux) — empty tmpfs root with only system dirs and the
+    grants bound in, all namespaces unshared (network too unless allowed);
+  - **Landlock + seccomp** (Linux, when bubblewrap cannot create namespaces —
+    Ubuntu 24.04+ restricts them via AppArmor) — the kernel enforces the same
+    grants without privileges; a blocked network refuses `AF_INET`,
+    `AF_INET6`, `AF_PACKET` sockets and `io_uring`;
+  - **Seatbelt** (macOS, `sandbox-exec`) — `(deny default)` profile, paths
+    passed as `-D` parameters, never spliced into the profile text.
+  Every confined program starts through a helper — the host's own executable
+  called with `__bastion-sandbox`, forwarded to `helper_main` (or the bundled
+  `bastion-sandbox-exec`) — which keeps only the variables the spec names and
+  execs the target under the backend. `Sandbox::command` gives a
+  `std::process::Command`; `Sandbox::launch` gives program/args/env for SDKs
+  that spawn on their own (the ACP SDK). Variable values never go through
+  argv. A program runs by the path it was given (a virtualenv's symlinked
+  `bin/python` keeps finding its venv), with its own and its symlink target's
+  directories readable. No `unsafe`. `tests/confinement.rs` runs real programs under the host
+  backend (writable/read-only/hidden paths, home directory, exact
+  environment, host loopback with the network blocked vs allowed);
+  `BASTION_SANDBOX_TESTS_REQUIRED=1` turns "no backend" into a failure.
+- **`bastion-agent-runtime` 0.2.1 — confined harnesses.** `with_confinement(
+  HarnessConfinement)` on `AcpxAgentRuntime`, `CodexAppServerRuntime` and
+  `AcpAgentRuntime` starts every session process under `bastion-sandbox`: the
+  session workspace (read-only when the policy says so), the harness's
+  install prefix, the state directories the host granted (`~/.claude`,
+  `~/.codex`, an npm cache — missing ones skipped), only the session's
+  `env.allow` (the ACP bridge no longer inherits the daemon's environment
+  when confined), a private `TMPDIR` under the workspace, and the network per
+  `SandboxProfile` (`Isolated` blocks it, `WorkspaceNet` keeps it, `Trusted`
+  skips confinement). Version probes stay unconfined. Descriptors report
+  `SandboxCoverage::Partial` when confined (filesystem enforced, network not
+  filtered by destination). A resumed Codex session, whose spec carries no
+  workspace, is confined to `owner_workspace(base, owner)` — now the single
+  mapping the agent loop also uses. `HarnessConfinement::command`/`launch`
+  are public for harnesses a host starts itself. Opt-in: without it nothing
+  changes.
+
+### Changed
+
+- **stdio MCP servers no longer inherit the daemon's environment.** A
+  `transport = "stdio"` server now starts from an empty environment plus
+  `PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_ALL`, and what its server table names:
+  `env` (literal values), `env_passthrough` (names copied from the daemon when
+  set), and an optional `cwd`. Before, it inherited the whole environment, so
+  it could read every secret the daemon was started with. No deployment is
+  affected today: `McpServerEntry` (what `bastion.toml` feeds
+  `McpClient::connect_from_config`) only carries a `url`, so the stdio path is
+  unreachable from product config; this hardens it before it is exposed.
+  `bastion-mcp` advances to `0.2.1`.
+- **MCP servers on Unix sockets.** `url = "unix:/abs/path.sock"` in
+  `[mcp.servers.<name>]` speaks the same streamable-HTTP protocol over that
+  socket (`http://localhost/mcp` inside it), through rmcp's reqwest client with
+  `unix_socket`. No TCP port: only a process that can open the socket file
+  reaches the server — how a native install runs its sidecars with no network
+  at all. Relative socket paths are rejected. `tests/unix_socket.rs` connects
+  to a real rmcp streamable-HTTP server behind axum on a socket.
+
+### Added
+
+- `AgentLoop::with_runtime_workspace_base(base)`: runtime-backed sessions and
+  tasks are confined under `base/<owner>` instead of
+  `$TMPDIR/bastion-agent-runtime-workspaces/<owner>`, so a host with a real
+  workspace (a desktop install) can point external harnesses at it. New public
+  field `AgentLoop::runtime_workspace_base` (`None` keeps the old root);
+  `bastion-runtime` advances to `0.3.0`.
+
 ## 0.4.1 — 2026-09-26
 
 Repo tag `v0.4.1`: only `bastion-providers` advanced, by a patch.

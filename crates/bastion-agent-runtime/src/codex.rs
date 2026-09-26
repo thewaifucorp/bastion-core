@@ -88,7 +88,7 @@ use crate::util::{parse_structured_line, resolve_on_path, sha256_digest, version
 use crate::*;
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
@@ -110,6 +110,8 @@ pub struct CodexAppServerRuntime {
     /// `health()` call (which `start()` always calls first) — never an
     /// optimistic guess before a real probe has actually run.
     sandbox_coverage: std::sync::Mutex<SandboxCoverage>,
+    /// OS confinement for the app-server process ([`crate::confine`]).
+    confinement: Option<HarnessConfinement>,
 }
 
 impl CodexAppServerRuntime {
@@ -118,6 +120,7 @@ impl CodexAppServerRuntime {
         Ok(Self {
             codex_bin: resolve_on_path("codex")?,
             sandbox_coverage: std::sync::Mutex::new(SandboxCoverage::None),
+            confinement: None,
         })
     }
 
@@ -126,7 +129,38 @@ impl CodexAppServerRuntime {
         Self {
             codex_bin,
             sandbox_coverage: std::sync::Mutex::new(SandboxCoverage::None),
+            confinement: None,
         }
+    }
+
+    /// Run the app-server under OS confinement: the session workspace (on
+    /// resume, the owner's workspace under the confinement's base), the
+    /// granted state directories (`~/.codex`), the network per profile.
+    /// Codex's own inner sandbox for the commands it runs still applies on
+    /// top of this one.
+    pub fn with_confinement(mut self, confinement: HarnessConfinement) -> Self {
+        self.confinement = Some(confinement);
+        self
+    }
+
+    fn app_server_command(
+        &self,
+        env: &BTreeMap<String, String>,
+        workspace: &WorkspacePolicy,
+        profile: SandboxProfile,
+    ) -> Result<Command, RuntimeError> {
+        let mut cmd = confine::command(
+            self.confinement.as_ref(),
+            confine::HarnessLaunch {
+                program: &self.codex_bin,
+                args: vec!["app-server".into()],
+                env,
+                workspace,
+                profile,
+            },
+        )?;
+        confine::piped(&mut cmd);
+        Ok(cmd)
     }
 
     /// Reads the cached sandbox-coverage detection (see module docs and
@@ -139,16 +173,6 @@ impl CodexAppServerRuntime {
             .sandbox_coverage
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    fn base_command(&self) -> Command {
-        let mut cmd = Command::new(&self.codex_bin);
-        cmd.arg("app-server")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        cmd
     }
 }
 
@@ -173,7 +197,10 @@ impl AgentRuntime for CodexAppServerRuntime {
                 approvals: ApprovalCoverage::Bridged,
                 egress: EgressCoverage::HarnessOwned,
                 budget: BudgetCoverage::Reported,
-                sandbox: self.cached_sandbox_coverage(),
+                sandbox: match &self.confinement {
+                    Some(_) => confine::coverage(self.confinement.as_ref()),
+                    None => self.cached_sandbox_coverage(),
+                },
             },
         }
     }
@@ -241,11 +268,7 @@ impl AgentRuntime for CodexAppServerRuntime {
             });
         }
 
-        let mut cmd = self.base_command();
-        cmd.env_clear();
-        for (k, v) in &spec.env.allow {
-            cmd.env(k, v);
-        }
+        let mut cmd = self.app_server_command(&spec.env.allow, &spec.workspace, spec.sandbox)?;
         let child = cmd.spawn().map_err(|e| {
             RuntimeError::Unavailable(format!("failed to spawn codex app-server: {e}"))
         })?;
@@ -298,11 +321,21 @@ impl AgentRuntime for CodexAppServerRuntime {
             return Err(RuntimeError::Unavailable(health.detail.unwrap_or_default()));
         }
 
-        let mut cmd = self.base_command();
-        cmd.env_clear();
-        for (k, v) in &spec.env.allow {
-            cmd.env(k, v);
-        }
+        // A resume spec carries no workspace (the thread keeps its own cwd),
+        // but a fresh app-server process needs confining again: to the
+        // owner's workspace under the confinement's base, the only root a
+        // session of this owner was ever started in.
+        let workspace = WorkspacePolicy {
+            root: self
+                .confinement
+                .as_ref()
+                .map(|c| c.owner_workspace(&handle.owner))
+                .unwrap_or_default(),
+            read_only: false,
+            deny: Vec::new(),
+        };
+        let mut cmd =
+            self.app_server_command(&spec.env.allow, &workspace, SandboxProfile::WorkspaceNet)?;
         let child = cmd.spawn().map_err(|e| {
             RuntimeError::Unavailable(format!("failed to spawn codex app-server: {e}"))
         })?;
