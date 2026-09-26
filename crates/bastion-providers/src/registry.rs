@@ -33,10 +33,16 @@ pub fn resolve_provider_with_credential(
         );
     }
 
-    if model_name.starts_with("claude") {
+    if let Some(model) = model_name.strip_prefix("bedrock/") {
+        // Claude on Amazon Bedrock — AWS credentials, never an Anthropic key.
+        Ok(Box::new(AnthropicProvider::bedrock(model)?))
+    } else if let Some(model) = model_name.strip_prefix("vertex/") {
+        // Claude on Google Vertex AI — Google ADC, never an Anthropic key.
+        Ok(Box::new(AnthropicProvider::vertex(model)?))
+    } else if model_name.starts_with("claude") {
         Ok(Box::new(match credential {
             Some(key) => AnthropicProvider::with_api_key(model_name, key),
-            None => AnthropicProvider::new(model_name),
+            None => AnthropicProvider::from_env(model_name)?,
         }))
     } else if model_name.starts_with("gpt")
         || model_name.starts_with("o1")
@@ -112,6 +118,10 @@ pub fn resolve_reflector_provider(
 pub fn resolve_provider_kind(model_name: &str) -> &'static str {
     if model_name == "claude_code" || model_name == "opencode" {
         "agent_runtime"
+    } else if model_name.starts_with("bedrock/") {
+        "bedrock"
+    } else if model_name.starts_with("vertex/") {
+        "vertex"
     } else if model_name.starts_with("claude") {
         "anthropic"
     } else if model_name.starts_with("gpt")
@@ -207,6 +217,14 @@ mod tests {
     #[test]
     fn resolve_provider_kind_anthropic() {
         assert_eq!(resolve_provider_kind("claude-opus-4-7"), "anthropic");
+        assert_eq!(
+            resolve_provider_kind("bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"),
+            "bedrock"
+        );
+        assert_eq!(
+            resolve_provider_kind("vertex/claude-sonnet-4-5@20250929"),
+            "vertex"
+        );
         assert_eq!(resolve_provider_kind("claude-sonnet-4-5"), "anthropic");
     }
 

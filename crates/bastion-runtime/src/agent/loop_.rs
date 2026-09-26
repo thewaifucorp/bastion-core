@@ -2890,7 +2890,9 @@ fn estimate_cost_usd(provider: &str, usage: &TokenUsage) -> f64 {
     }
 
     match provider {
-        "anthropic" => {
+        // Claude on Amazon Bedrock and Google Vertex AI is priced like the
+        // Anthropic API for the same model.
+        "anthropic" | "bedrock" | "vertex" => {
             let input_cost = usage.input_tokens as f64 * 3.0 / 1_000_000.0;
             let output_cost = usage.output_tokens as f64 * 15.0 / 1_000_000.0;
             input_cost + output_cost

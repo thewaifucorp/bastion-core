@@ -5,10 +5,12 @@
 //!   retorna o bloco como contexto para o turn (injeção sempre-presente).
 //! - Se não há bloco (primeiro uso):
 //!   retorna um system prompt de onboarding que convida o agente a se apresentar
-//!   e gravar sua identidade via memory_store (disponível como tool via BIG-1).
+//!   e gravar sua identidade via memory_store (`agent::memory_tools`, registrada
+//!   pelo host no `CapabilityRegistry`).
 //!
 //! O bloco de identidade NÃO está em bastion.toml — está na camada de memória.
-//! Editável por conversa: o agente chama memory_revoke(old_id) + memory_store(new_content).
+//! Editável por conversa: o agente chama memory_revoke(old_id) (com aprovação
+//! do dono) + memory_store(new_content).
 
 // M2 step 6: fully-qualified — `crate::agent` in `bastion-cognition` is this
 // crate's own dream/procedural/memory_rag/identity module; the kernel's
