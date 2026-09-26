@@ -7,6 +7,28 @@ version).
 
 ## Unreleased
 
+### Changed
+
+- **stdio MCP servers no longer inherit the daemon's environment.** A
+  `transport = "stdio"` server now starts from an empty environment plus
+  `PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_ALL`, and what its server table names:
+  `env` (literal values), `env_passthrough` (names copied from the daemon when
+  set), and an optional `cwd`. Before, it inherited the whole environment, so
+  it could read every secret the daemon was started with. No deployment is
+  affected today: `McpServerEntry` (what `bastion.toml` feeds
+  `McpClient::connect_from_config`) only carries a `url`, so the stdio path is
+  unreachable from product config; this hardens it before it is exposed.
+  `bastion-mcp` advances to `0.2.1`.
+
+### Added
+
+- `AgentLoop::with_runtime_workspace_base(base)`: runtime-backed sessions and
+  tasks are confined under `base/<owner>` instead of
+  `$TMPDIR/bastion-agent-runtime-workspaces/<owner>`, so a host with a real
+  workspace (a desktop install) can point external harnesses at it. New public
+  field `AgentLoop::runtime_workspace_base` (`None` keeps the old root);
+  `bastion-runtime` advances to `0.3.0`.
+
 ## 0.4.1 — 2026-09-26
 
 Repo tag `v0.4.1`: only `bastion-providers` advanced, by a patch.

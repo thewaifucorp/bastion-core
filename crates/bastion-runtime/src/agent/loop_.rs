@@ -215,6 +215,12 @@ pub struct AgentLoop {
     /// [`AgentLoop::with_permission_timeout`] so the timeout path doesn't
     /// need a slow real-time wait to exercise.
     pub permission_timeout: std::time::Duration,
+    /// Parent of the per-owner workspace a runtime-backed session or task is
+    /// confined to (`<base>/<owner>`). `None` keeps the historical
+    /// `$TMPDIR/bastion-agent-runtime-workspaces`. A host that has a real
+    /// workspace for its operator (a desktop install, a project directory)
+    /// sets it via [`AgentLoop::with_runtime_workspace_base`].
+    pub runtime_workspace_base: Option<std::path::PathBuf>,
     /// M4-07: verifies a runtime-backed session's `AuthProfileRef` resolves
     /// to something usable before `start`/`resume` is attempted (see
     /// [`AuthResolver`]'s rustdoc for why this discharge point sits here,
@@ -310,6 +316,7 @@ impl AgentLoop {
                 std::collections::HashMap::new(),
             )),
             permission_timeout: std::time::Duration::from_secs(600),
+            runtime_workspace_base: None,
             // M4-07: no check at all is the pre-existing behavior — same
             // "no Option, explicit fail-closed-when-opted-in default"
             // discipline as `permission_gate` above, but this default
@@ -370,6 +377,13 @@ impl AgentLoop {
     /// tests use this to shrink the wait to milliseconds.
     pub fn with_permission_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.permission_timeout = timeout;
+        self
+    }
+
+    /// Confine runtime-backed sessions and tasks under `base/<owner>`
+    /// instead of `$TMPDIR/bastion-agent-runtime-workspaces/<owner>`.
+    pub fn with_runtime_workspace_base(mut self, base: impl Into<std::path::PathBuf>) -> Self {
+        self.runtime_workspace_base = Some(base.into());
         self
     }
 
@@ -595,9 +609,17 @@ impl AgentLoop {
         }
         prompt.push_str(user_input);
 
-        let _ = tokio::fs::create_dir_all(runtime_workspace_root(owner)).await;
-        let (spec, timeout, permissions, env) =
-            build_runtime_session_spec(owner, runtime_id, &self.backend_profile);
+        let _ = tokio::fs::create_dir_all(runtime_workspace_root(
+            self.runtime_workspace_base.as_deref(),
+            owner,
+        ))
+        .await;
+        let (spec, timeout, permissions, env) = build_runtime_session_spec(
+            owner,
+            runtime_id,
+            &self.backend_profile,
+            self.runtime_workspace_base.as_deref(),
+        );
 
         // M4-07: verify the resolved AuthProfileRef is actually usable
         // BEFORE attempting start/resume — typed, fail-closed, no secret
@@ -795,9 +817,17 @@ impl AgentLoop {
             .await
             .map_err(|e| anyhow::Error::new(BastionError::BackendUnavailable(e.to_string())))?;
 
-        let _ = tokio::fs::create_dir_all(runtime_workspace_root(owner)).await;
-        let (spec, _timeout, _permissions, _env) =
-            build_runtime_session_spec(owner, &runtime_id, &self.backend_profile);
+        let _ = tokio::fs::create_dir_all(runtime_workspace_root(
+            self.runtime_workspace_base.as_deref(),
+            owner,
+        ))
+        .await;
+        let (spec, _timeout, _permissions, _env) = build_runtime_session_spec(
+            owner,
+            &runtime_id,
+            &self.backend_profile,
+            self.runtime_workspace_base.as_deref(),
+        );
 
         // M4-07: same fail-closed auth check as mode 2 — see its call site
         // in `run_runtime_backed_turn` for the rationale.
@@ -904,8 +934,12 @@ impl AgentLoop {
             .resolve(&handle.runtime_id)
             .await
             .map_err(|e| anyhow::Error::new(BastionError::BackendUnavailable(e.to_string())))?;
-        let (spec, timeout, permissions, env) =
-            build_runtime_session_spec(owner, &handle.runtime_id, &self.backend_profile);
+        let (spec, timeout, permissions, env) = build_runtime_session_spec(
+            owner,
+            &handle.runtime_id,
+            &self.backend_profile,
+            self.runtime_workspace_base.as_deref(),
+        );
 
         // M4-07: same fail-closed auth check as mode 2/delegate — see
         // `run_runtime_backed_turn`'s call site for the rationale. `spec`
@@ -2547,16 +2581,15 @@ impl TurnKernel for AgentLoop {
 
 /// Ciclo 2.4 (`docs/SUPPORT-MATRIX.md` §3): filesystem
 /// confinement root for a runtime-backed session/task, one directory per
-/// owner. A minimal, deliberately simple default for this cycle (declarative
-/// config, not rich per-deployment workspace policy yet — M4 pleno scope);
-/// operators who need a different root can point `TMPDIR`/`HOME` elsewhere.
-fn runtime_workspace_root(owner: &str) -> std::path::PathBuf {
+/// owner, under `base` ([`AgentLoop::runtime_workspace_base`]) or, when the
+/// host set none, `$TMPDIR/bastion-agent-runtime-workspaces`.
+fn runtime_workspace_root(base: Option<&std::path::Path>, owner: &str) -> std::path::PathBuf {
     let sanitized: String = owner
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect();
-    std::env::temp_dir()
-        .join("bastion-agent-runtime-workspaces")
+    base.map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::env::temp_dir().join("bastion-agent-runtime-workspaces"))
         .join(if sanitized.is_empty() {
             "_owner".to_string()
         } else {
@@ -2576,6 +2609,7 @@ fn build_runtime_session_spec(
     owner: &str,
     runtime_id: &str,
     backend_profile: &BackendProfile,
+    workspace_base: Option<&std::path::Path>,
 ) -> (
     bastion_agent_runtime::SessionSpec,
     bastion_agent_runtime::TimeoutPolicy,
@@ -2601,7 +2635,7 @@ fn build_runtime_session_spec(
     let spec = bastion_agent_runtime::SessionSpec {
         owner: owner.to_string(),
         workspace: bastion_agent_runtime::WorkspacePolicy {
-            root: runtime_workspace_root(owner),
+            root: runtime_workspace_root(workspace_base, owner),
             read_only: false,
             deny: Vec::new(),
         },
@@ -3178,6 +3212,21 @@ mod cache_usage_attributes_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_workspace_root_uses_the_host_base_when_set() {
+        let base = std::path::Path::new("/home/op/.local/share/bastion/workspace");
+        assert_eq!(
+            runtime_workspace_root(Some(base), "alice@example"),
+            base.join("alice_example")
+        );
+        assert_eq!(
+            runtime_workspace_root(None, "alice"),
+            std::env::temp_dir()
+                .join("bastion-agent-runtime-workspaces")
+                .join("alice")
+        );
+    }
     use crate::memory::PrivacyTier;
     use crate::provider::{Provider, SharedProvider};
     use crate::types::{CallConfig, LlmResponse, Message};
