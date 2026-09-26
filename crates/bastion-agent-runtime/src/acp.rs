@@ -180,6 +180,8 @@ pub struct AcpAgentRuntime {
     /// Full bridge command line, parsed shell-style at spawn time.
     command: String,
     agent_key: &'static str,
+    /// OS confinement for the session's bridge process ([`crate::confine`]).
+    confinement: Option<HarnessConfinement>,
 }
 
 impl AcpAgentRuntime {
@@ -188,7 +190,68 @@ impl AcpAgentRuntime {
     pub fn new(command: impl Into<String>) -> Self {
         let command = command.into();
         let agent_key = agent_key_for(&command);
-        Self { command, agent_key }
+        Self {
+            command,
+            agent_key,
+            confinement: None,
+        }
+    }
+
+    /// Run each session's bridge (and everything it starts — the agent CLI
+    /// behind it) under OS confinement: the session workspace, the granted
+    /// state directories (`~/.claude`, `~/.claude.json`, an npm cache), the
+    /// network per profile, and only the session's `env.allow`. The
+    /// `initialize` probe in `health()` stays unconfined: it opens no
+    /// session and reads nothing of the owner's.
+    pub fn with_confinement(mut self, confinement: HarnessConfinement) -> Self {
+        self.confinement = Some(confinement);
+        self
+    }
+
+    /// The bridge to spawn for `spec`: as configured, or wrapped in the
+    /// sandbox helper when confined. A `#!` script (`npx`, an npm-installed
+    /// bridge) is launched as `interpreter script` so the interpreter's
+    /// install is what the sandbox exposes.
+    fn session_agent(&self, spec: &SessionSpec) -> Result<acp::AcpAgent, RuntimeError> {
+        let agent = acp::AcpAgent::from_str(&self.command)
+            .map_err(|e| RuntimeError::Unavailable(format!("cannot spawn bridge: {e}")))?;
+        if self.confinement.is_none() || spec.sandbox == SandboxProfile::Trusted {
+            return Ok(agent);
+        }
+        let config = agent.config();
+        let bin = if config.command().components().count() > 1 {
+            config.command().to_path_buf()
+        } else {
+            crate::util::resolve_on_path(&config.command().to_string_lossy())?
+        };
+        let mut args: Vec<std::ffi::OsString> = config.arguments().iter().map(Into::into).collect();
+        let program = match crate::util::resolve_shebang_interpreter(&bin)? {
+            Some(interpreter) => {
+                args.insert(0, bin.into_os_string());
+                interpreter
+            }
+            None => bin,
+        };
+        // Variables the bridge's own config set, then the session's allow
+        // list on top — nothing else of the daemon's environment.
+        let mut env = config.environment().clone();
+        env.extend(spec.env.allow.clone());
+        let launch = confine::launch(
+            self.confinement.as_ref(),
+            confine::HarnessLaunch {
+                program: &program,
+                args,
+                env: &env,
+                workspace: &spec.workspace,
+                profile: spec.sandbox,
+            },
+        )?
+        .ok_or_else(|| RuntimeError::Unavailable("confinement unexpectedly skipped".into()))?;
+        Ok(acp::AcpAgent::new(
+            acp::AcpAgentConfig::new(launch.program)
+                .args(launch.args.iter().map(|a| a.to_string_lossy().into_owned()))
+                .envs(launch.env),
+        ))
     }
 
     /// Spawn the bridge, perform a bare `initialize`, and return what it says
@@ -265,7 +328,7 @@ impl AgentRuntime for AcpAgentRuntime {
                 budget: BudgetCoverage::Reported,
                 // Writes are native (module docs, finding 1); `cwd` is a hint,
                 // not a jail.
-                sandbox: SandboxCoverage::None,
+                sandbox: confine::coverage(self.confinement.as_ref()),
             },
         }
     }
@@ -298,8 +361,7 @@ impl AgentRuntime for AcpAgentRuntime {
         let (ready_tx, ready_rx) = oneshot::channel::<Result<SessionId, String>>();
 
         let shared = Arc::new(Shared::new(event_tx, spec.workspace.clone()));
-        let agent = acp::AcpAgent::from_str(&self.command)
-            .map_err(|e| RuntimeError::Unavailable(format!("cannot spawn bridge: {e}")))?;
+        let agent = self.session_agent(&spec)?;
 
         let handle = SessionHandle {
             runtime_id: descriptor_id_for(self.agent_key).to_string(),

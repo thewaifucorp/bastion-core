@@ -2584,17 +2584,10 @@ impl TurnKernel for AgentLoop {
 /// owner, under `base` ([`AgentLoop::runtime_workspace_base`]) or, when the
 /// host set none, `$TMPDIR/bastion-agent-runtime-workspaces`.
 fn runtime_workspace_root(base: Option<&std::path::Path>, owner: &str) -> std::path::PathBuf {
-    let sanitized: String = owner
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect();
-    base.map(std::path::Path::to_path_buf)
-        .unwrap_or_else(|| std::env::temp_dir().join("bastion-agent-runtime-workspaces"))
-        .join(if sanitized.is_empty() {
-            "_owner".to_string()
-        } else {
-            sanitized
-        })
+    let base = base
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::env::temp_dir().join("bastion-agent-runtime-workspaces"));
+    bastion_agent_runtime::owner_workspace(&base, owner)
 }
 
 /// Ciclo 2.4 (design doc §3): `SessionSpec` construction shared by mode 2

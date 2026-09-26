@@ -32,6 +32,22 @@ version).
   backend (writable/read-only/hidden paths, home directory, exact
   environment, host loopback with the network blocked vs allowed);
   `BASTION_SANDBOX_TESTS_REQUIRED=1` turns "no backend" into a failure.
+- **`bastion-agent-runtime` 0.2.1 — confined harnesses.** `with_confinement(
+  HarnessConfinement)` on `AcpxAgentRuntime`, `CodexAppServerRuntime` and
+  `AcpAgentRuntime` starts every session process under `bastion-sandbox`: the
+  session workspace (read-only when the policy says so), the harness's
+  install prefix, the state directories the host granted (`~/.claude`,
+  `~/.codex`, an npm cache — missing ones skipped), only the session's
+  `env.allow` (the ACP bridge no longer inherits the daemon's environment
+  when confined), a private `TMPDIR` under the workspace, and the network per
+  `SandboxProfile` (`Isolated` blocks it, `WorkspaceNet` keeps it, `Trusted`
+  skips confinement). Version probes stay unconfined. Descriptors report
+  `SandboxCoverage::Partial` when confined (filesystem enforced, network not
+  filtered by destination). A resumed Codex session, whose spec carries no
+  workspace, is confined to `owner_workspace(base, owner)` — now the single
+  mapping the agent loop also uses. `HarnessConfinement::command`/`launch`
+  are public for harnesses a host starts itself. Opt-in: without it nothing
+  changes.
 
 ### Changed
 

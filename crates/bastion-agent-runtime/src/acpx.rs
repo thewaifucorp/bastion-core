@@ -99,6 +99,7 @@ use crate::util::{
 use crate::*;
 use async_trait::async_trait;
 use std::collections::{BTreeMap, HashMap};
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -140,6 +141,49 @@ pub struct AcpxAgentRuntime {
     /// this adapter spawns (module docs). Defaults per
     /// [`default_auth_policy_for`]; override with [`Self::with_auth_policy`].
     auth_policy: &'static str,
+    /// OS confinement for every session process ([`crate::confine`]).
+    confinement: Option<HarnessConfinement>,
+}
+
+/// One `acpx` invocation: interpreter-aware program + args, the given env
+/// only, confined when `confinement` is set, stdin closed and stdout/stderr
+/// piped.
+fn acpx_command(
+    interpreter: Option<&Path>,
+    acpx_bin: &Path,
+    args: Vec<OsString>,
+    env: &BTreeMap<String, String>,
+    confinement: Option<&HarnessConfinement>,
+    workspace: &WorkspacePolicy,
+    profile: SandboxProfile,
+) -> Result<Command, RuntimeError> {
+    let (program, args) = match interpreter {
+        Some(interp) => {
+            let mut full = vec![acpx_bin.as_os_str().to_owned()];
+            full.extend(args);
+            (interp, full)
+        }
+        None => (acpx_bin, args),
+    };
+    let mut cmd = confine::command(
+        confinement,
+        confine::HarnessLaunch {
+            program,
+            args,
+            env,
+            workspace,
+            profile,
+        },
+    )?;
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    Ok(cmd)
+}
+
+fn os_args<const N: usize>(args: [&OsStr; N]) -> Vec<OsString> {
+    args.iter().map(|a| a.to_os_string()).collect()
 }
 
 impl AcpxAgentRuntime {
@@ -163,7 +207,16 @@ impl AcpxAgentRuntime {
             interpreter,
             agent,
             auth_policy,
+            confinement: None,
         })
+    }
+
+    /// Run every session process (`sessions ensure`, `prompt`, `cancel`)
+    /// under OS confinement. The version probe in `health()` stays
+    /// unconfined: it reads nothing of the owner's.
+    pub fn with_confinement(mut self, confinement: HarnessConfinement) -> Self {
+        self.confinement = Some(confinement);
+        self
     }
 
     /// Overrides the `--auth-policy` value this adapter passes to every
@@ -226,7 +279,7 @@ impl AgentRuntime for AcpxAgentRuntime {
                 approvals: ApprovalCoverage::HarnessOwned,
                 egress: EgressCoverage::HarnessOwned,
                 budget: BudgetCoverage::Reported,
-                sandbox: SandboxCoverage::None,
+                sandbox: confine::coverage(self.confinement.as_ref()),
             },
         }
     }
@@ -285,19 +338,23 @@ impl AgentRuntime for AcpxAgentRuntime {
             unique_suffix()
         );
 
-        let mut ensure_cmd = self.base_command();
-        ensure_cmd.env_clear();
-        for (k, v) in &spec.env.allow {
-            ensure_cmd.env(k, v);
-        }
-        ensure_cmd
-            .arg("--cwd")
-            .arg(&spec.workspace.root)
-            .arg(&self.agent)
-            .arg("sessions")
-            .arg("ensure")
-            .arg("--name")
-            .arg(&session_name);
+        let mut ensure_cmd = acpx_command(
+            self.interpreter.as_deref(),
+            &self.acpx_bin,
+            os_args([
+                "--cwd".as_ref(),
+                spec.workspace.root.as_os_str(),
+                self.agent.as_ref(),
+                "sessions".as_ref(),
+                "ensure".as_ref(),
+                "--name".as_ref(),
+                session_name.as_ref(),
+            ]),
+            &spec.env.allow,
+            self.confinement.as_ref(),
+            &spec.workspace,
+            spec.sandbox,
+        )?;
         let output = ensure_cmd.output().await.map_err(|e| {
             RuntimeError::Unavailable(format!("failed to spawn acpx sessions ensure: {e}"))
         })?;
@@ -327,6 +384,9 @@ impl AgentRuntime for AcpxAgentRuntime {
             handle,
             session_name,
             workspace_root: spec.workspace.root.clone(),
+            workspace: spec.workspace.clone(),
+            profile: spec.sandbox,
+            confinement: self.confinement.clone(),
             permissions: spec.permissions.clone(),
             env_allow: spec.env.allow.clone(),
             per_task_timeout: spec.timeout.per_task,
@@ -419,6 +479,9 @@ pub(crate) struct AcpxSession {
     handle: SessionHandle,
     session_name: String,
     workspace_root: PathBuf,
+    workspace: WorkspacePolicy,
+    profile: SandboxProfile,
+    confinement: Option<HarnessConfinement>,
     permissions: PermissionProfile,
     env_allow: BTreeMap<String, String>,
     per_task_timeout: Duration,
@@ -431,55 +494,55 @@ pub(crate) struct AcpxSession {
 }
 
 impl AcpxSession {
-    fn base_command(&self) -> Command {
-        let mut cmd = match &self.interpreter {
-            Some(interp) => {
-                let mut c = Command::new(interp);
-                c.arg(&self.acpx_bin);
-                c
-            }
-            None => Command::new(&self.acpx_bin),
-        };
-        cmd.env_clear();
-        for (k, v) in &self.env_allow {
-            cmd.env(k, v);
-        }
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        cmd
+    fn command(&self, args: Vec<OsString>) -> Result<Command, RuntimeError> {
+        acpx_command(
+            self.interpreter.as_deref(),
+            &self.acpx_bin,
+            args,
+            &self.env_allow,
+            self.confinement.as_ref(),
+            &self.workspace,
+            self.profile,
+        )
     }
 
-    fn build_prompt_command(&self, prompt: &str) -> Command {
-        let mut cmd = self.base_command();
-        cmd.arg("--format")
-            .arg("json")
-            .arg("--cwd")
-            .arg(&self.workspace_root)
-            .arg("--auth-policy")
-            .arg(self.auth_policy)
-            .arg("--non-interactive-permissions")
-            .arg("deny");
-        for flag in permission_flags(&self.permissions) {
-            cmd.arg(flag);
-        }
-        cmd.arg(&self.agent)
-            .arg("prompt")
-            .arg("-s")
-            .arg(&self.session_name)
-            .arg(prompt);
-        cmd
+    fn build_prompt_command(&self, prompt: &str) -> Result<Command, RuntimeError> {
+        let mut args = os_args([
+            "--format".as_ref(),
+            "json".as_ref(),
+            "--cwd".as_ref(),
+            self.workspace_root.as_os_str(),
+            "--auth-policy".as_ref(),
+            self.auth_policy.as_ref(),
+            "--non-interactive-permissions".as_ref(),
+            "deny".as_ref(),
+        ]);
+        args.extend(
+            permission_flags(&self.permissions)
+                .into_iter()
+                .map(OsString::from),
+        );
+        args.extend(os_args([
+            self.agent.as_ref(),
+            "prompt".as_ref(),
+            "-s".as_ref(),
+            self.session_name.as_ref(),
+            prompt.as_ref(),
+        ]));
+        self.command(args)
     }
 
     async fn send_companion_cancel(&self) {
-        let mut cmd = self.base_command();
-        cmd.arg("--cwd")
-            .arg(&self.workspace_root)
-            .arg(&self.agent)
-            .arg("cancel")
-            .arg("-s")
-            .arg(&self.session_name);
+        let Ok(mut cmd) = self.command(os_args([
+            "--cwd".as_ref(),
+            self.workspace_root.as_os_str(),
+            self.agent.as_ref(),
+            "cancel".as_ref(),
+            "-s".as_ref(),
+            self.session_name.as_ref(),
+        ])) else {
+            return;
+        };
         if let Ok(mut child) = cmd.spawn() {
             let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
         }
@@ -508,7 +571,7 @@ impl RuntimeSession for AcpxSession {
         let task_id = TaskId(self.next_task_id);
         self.next_task_id += 1;
 
-        let mut cmd = self.build_prompt_command(&input.prompt);
+        let mut cmd = self.build_prompt_command(&input.prompt)?;
         let mut child = cmd
             .spawn()
             .map_err(|e| RuntimeError::Unavailable(format!("failed to spawn acpx prompt: {e}")))?;
