@@ -50,6 +50,9 @@ ALLOWED_DEPS[bastion-extension-protocol]="bastion-types"
 # module with a fuel budget and no imports. `src/extension/wasm.rs` (app)
 # wraps this into an ExtensionInstance/Capability.
 ALLOWED_DEPS[bastion-extension-wasm]=""
+# OS confinement (bubblewrap/Seatbelt) for programs Bastion runs on the host.
+# Zero bastion-* dependencies, same stance as bastion-extension-wasm.
+ALLOWED_DEPS[bastion-sandbox]=""
 
 # --- Allowlist: [dev-dependencies] only (test-only edges, never production) -
 declare -A ALLOWED_DEV_DEPS
@@ -64,6 +67,7 @@ ALLOWED_DEV_DEPS[bastion-personas]=""
 ALLOWED_DEV_DEPS[bastion-mesh]=""
 ALLOWED_DEV_DEPS[bastion-extension-protocol]=""
 ALLOWED_DEV_DEPS[bastion-extension-wasm]=""
+ALLOWED_DEV_DEPS[bastion-sandbox]=""
 
 contains_word() {
   local needle="$1"

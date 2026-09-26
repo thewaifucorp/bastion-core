@@ -7,6 +7,32 @@ version).
 
 ## Unreleased
 
+### Added
+
+- **`bastion-sandbox` 0.1.0 — OS-level confinement for host programs.** A
+  `SandboxSpec` (program, exact environment, cwd, read-only paths, writable
+  paths, network blocked or allowed) runs confined; every path not granted is
+  out of reach, the operator's home included. `Sandbox::detect(helper)` picks
+  the backend by running a confined program:
+  - **bubblewrap** (Linux) — empty tmpfs root with only system dirs and the
+    grants bound in, all namespaces unshared (network too unless allowed);
+  - **Landlock + seccomp** (Linux, when bubblewrap cannot create namespaces —
+    Ubuntu 24.04+ restricts them via AppArmor) — the kernel enforces the same
+    grants without privileges; a blocked network refuses `AF_INET`,
+    `AF_INET6`, `AF_PACKET` sockets and `io_uring`;
+  - **Seatbelt** (macOS, `sandbox-exec`) — `(deny default)` profile, paths
+    passed as `-D` parameters, never spliced into the profile text.
+  Every confined program starts through a helper — the host's own executable
+  called with `__bastion-sandbox`, forwarded to `helper_main` (or the bundled
+  `bastion-sandbox-exec`) — which keeps only the variables the spec names and
+  execs the target under the backend. `Sandbox::command` gives a
+  `std::process::Command`; `Sandbox::launch` gives program/args/env for SDKs
+  that spawn on their own (the ACP SDK). Variable values never go through
+  argv. No `unsafe`. `tests/confinement.rs` runs real programs under the host
+  backend (writable/read-only/hidden paths, home directory, exact
+  environment, host loopback with the network blocked vs allowed);
+  `BASTION_SANDBOX_TESTS_REQUIRED=1` turns "no backend" into a failure.
+
 ### Changed
 
 - **stdio MCP servers no longer inherit the daemon's environment.** A
