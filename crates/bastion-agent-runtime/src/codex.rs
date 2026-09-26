@@ -302,7 +302,17 @@ impl AgentRuntime for CodexAppServerRuntime {
             next_task_id: 0,
             event_tx: tx,
             event_rx: rx,
-            pending_resume_warning: None,
+            // Surfaced on the first task, like a resume-time gap: codex's
+            // app-server takes MCP servers from its own config only.
+            pending_resume_warning: spec
+                .mcp_bridge
+                .as_ref()
+                .filter(|b| !b.servers.is_empty())
+                .map(|_| {
+                    "mcp_bridge ignored: codex app-server reads MCP servers from its own \
+                     config, not from the session"
+                        .to_string()
+                }),
         }))
     }
 

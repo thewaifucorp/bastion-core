@@ -81,17 +81,18 @@ use crate::conformance::FaultInjection;
 use crate::util::sha256_digest;
 use crate::*;
 use acp::schema::v1::{
-    CancelNotification, ClientCapabilities, ContentBlock, ContentChunk, Diff,
-    FileSystemCapabilities, InitializeRequest, NewSessionRequest, PermissionOptionKind,
-    PromptRequest, ReadTextFileRequest, ReadTextFileResponse, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionId,
-    SessionNotification, SessionUpdate, StopReason, TextContent, ToolCall, ToolCallContent,
+    CancelNotification, ClientCapabilities, ContentBlock, ContentChunk, Diff, EnvVariable,
+    FileSystemCapabilities, HttpHeader, InitializeRequest, McpServer, McpServerHttp,
+    McpServerStdio, NewSessionRequest, PermissionOptionKind, PromptRequest, ReadTextFileRequest,
+    ReadTextFileResponse, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, SelectedPermissionOutcome, SessionId, SessionNotification,
+    SessionUpdate, SetSessionModeRequest, StopReason, TextContent, ToolCall, ToolCallContent,
     ToolCallStatus, ToolCallUpdate, WriteTextFileRequest, WriteTextFileResponse,
 };
 use acp::schema::ProtocolVersion;
 use agent_client_protocol as acp;
 use async_trait::async_trait;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -173,6 +174,79 @@ fn approvals_for(agent_key: &str) -> ApprovalCoverage {
     }
 }
 
+/// Variables a bridge's agent gets on top of its own configuration.
+///
+/// Claude Code keeps an "auto memory" it writes to under `~/.claude` without
+/// asking — pre-approved by Claude Code itself, so never a permission request
+/// Bastion sees. Bastion owns memory in a Bastion session; the feature is off.
+fn agent_env(agent_key: &str) -> BTreeMap<String, String> {
+    match agent_key {
+        "claude" => BTreeMap::from([(
+            "CLAUDE_CODE_DISABLE_AUTO_MEMORY".to_string(),
+            "1".to_string(),
+        )]),
+        _ => BTreeMap::new(),
+    }
+}
+
+/// `session/new` `_meta` for a bridge that reads options from it.
+///
+/// `claude-agent-acp` would otherwise load the operator's own Claude Code
+/// setup — user/project/local settings with their permission `allow` rules
+/// and hooks, plugins, skills, and every MCP server the account has — into a
+/// session Bastion is supposed to govern. An `allow` rule there answers a
+/// permission request before Bastion ever sees it. `settingSources: []` loads
+/// none of it and `strictMcpConfig` keeps only the servers Bastion passed.
+/// The login itself is unaffected: it is not a setting.
+///
+/// The one thing pre-allowed is the MCP servers Bastion itself bridged in
+/// (`bridged`): every call there is already decided by Bastion's own policy on
+/// the server side (egress, and the approval queue for capabilities that need
+/// one), so asking again in the harness would be the same question twice.
+fn session_meta(agent_key: &str, bridged: &[&str]) -> Option<acp::schema::v1::Meta> {
+    match agent_key {
+        "claude" => {
+            let allowed: Vec<String> = bridged.iter().map(|name| format!("mcp__{name}")).collect();
+            serde_json::json!({
+                "claudeCode": {
+                    "options": {
+                        "settingSources": [],
+                        "strictMcpConfig": true,
+                        "allowedTools": allowed
+                    }
+                }
+            })
+            .as_object()
+            .cloned()
+        }
+        _ => None,
+    }
+}
+
+/// The session mode under which the bridge asks before acting, when it is not
+/// already the current one. `claude-agent-acp` picks its initial mode from the
+/// operator's `permissions.defaultMode` (read regardless of `settingSources`),
+/// and `acceptEdits` or `bypassPermissions` there would skip Bastion's approval
+/// for every edit.
+fn asking_mode(
+    agent_key: &str,
+    modes: Option<&acp::schema::v1::SessionModeState>,
+) -> Option<acp::schema::v1::SessionModeId> {
+    let wanted = match agent_key {
+        "claude" => "default",
+        _ => return None,
+    };
+    let modes = modes?;
+    if modes.current_mode_id.0.as_ref() == wanted {
+        return None;
+    }
+    modes
+        .available_modes
+        .iter()
+        .find(|m| m.id.0.as_ref() == wanted)
+        .map(|m| m.id.clone())
+}
+
 /// Adapter for one ACP agent bridge. Cheap to construct; sessions are
 /// independent processes.
 #[derive(Debug, Clone)]
@@ -215,8 +289,19 @@ impl AcpAgentRuntime {
     fn session_agent(&self, spec: &SessionSpec) -> Result<acp::AcpAgent, RuntimeError> {
         let agent = acp::AcpAgent::from_str(&self.command)
             .map_err(|e| RuntimeError::Unavailable(format!("cannot spawn bridge: {e}")))?;
+        let extra_env = agent_env(self.agent_key);
         if self.confinement.is_none() || spec.sandbox == SandboxProfile::Trusted {
-            return Ok(agent);
+            if extra_env.is_empty() {
+                return Ok(agent);
+            }
+            let config = agent.config();
+            let mut env = config.environment().clone();
+            env.extend(extra_env);
+            return Ok(acp::AcpAgent::new(
+                acp::AcpAgentConfig::new(config.command().to_path_buf())
+                    .args(config.arguments().iter().cloned())
+                    .envs(env),
+            ));
         }
         let config = agent.config();
         let bin = if config.command().components().count() > 1 {
@@ -235,6 +320,7 @@ impl AcpAgentRuntime {
         // Variables the bridge's own config set, then the session's allow
         // list on top — nothing else of the daemon's environment.
         let mut env = config.environment().clone();
+        env.extend(extra_env);
         env.extend(spec.env.allow.clone());
         let launch = confine::launch(
             self.confinement.as_ref(),
@@ -373,6 +459,7 @@ impl AgentRuntime for AcpAgentRuntime {
 
         tokio::spawn(run_connection(
             agent,
+            self.agent_key,
             shared.clone(),
             spec.clone(),
             cmd_rx,
@@ -471,6 +558,19 @@ struct Shared {
     /// this adapter emitted no `Artifact` at all. `std::sync::Mutex` because
     /// the update path is synchronous and never awaits while holding it.
     tool_calls: std::sync::Mutex<HashMap<String, ToolCallState>>,
+    /// Time the current turn spent waiting on a permission decision. The
+    /// per-task watchdog does not count it: a person deciding is not the agent
+    /// being slow, and a timeout that fires while they read the diff would
+    /// turn every approval longer than the task budget into a failure.
+    decision_wait: std::sync::Mutex<DecisionWait>,
+}
+
+/// Bookkeeping for [`Shared::decision_wait`].
+#[derive(Default)]
+struct DecisionWait {
+    outstanding: usize,
+    since: Option<std::time::Instant>,
+    total: Duration,
 }
 
 /// Everything learned so far about one in-flight tool call.
@@ -502,6 +602,43 @@ impl Shared {
             status: AsyncMutex::new(SessionStatus::Idle),
             last_usage: AtomicU64::new(0),
             tool_calls: std::sync::Mutex::new(HashMap::new()),
+            decision_wait: std::sync::Mutex::new(DecisionWait::default()),
+        }
+    }
+
+    /// A permission request started waiting on a decision.
+    fn decision_wait_started(&self) {
+        let mut wait = self.decision_wait.lock().unwrap_or_else(|e| e.into_inner());
+        if wait.outstanding == 0 {
+            wait.since = Some(std::time::Instant::now());
+        }
+        wait.outstanding += 1;
+    }
+
+    /// A permission request got its decision (or was abandoned).
+    fn decision_wait_ended(&self) {
+        let mut wait = self.decision_wait.lock().unwrap_or_else(|e| e.into_inner());
+        wait.outstanding = wait.outstanding.saturating_sub(1);
+        if wait.outstanding == 0 {
+            if let Some(since) = wait.since.take() {
+                wait.total += since.elapsed();
+            }
+        }
+    }
+
+    /// Time spent waiting on decisions so far this turn, and whether a
+    /// decision is being waited on right now.
+    fn decision_wait(&self) -> (Duration, bool) {
+        let wait = self.decision_wait.lock().unwrap_or_else(|e| e.into_inner());
+        let ongoing = wait.since.map(|s| s.elapsed()).unwrap_or_default();
+        (wait.total + ongoing, wait.outstanding > 0)
+    }
+
+    fn reset_decision_wait(&self) {
+        let mut wait = self.decision_wait.lock().unwrap_or_else(|e| e.into_inner());
+        wait.total = Duration::ZERO;
+        if wait.outstanding > 0 {
+            wait.since = Some(std::time::Instant::now());
         }
     }
 
@@ -568,6 +705,7 @@ impl Shared {
 /// Drives one bridge connection for the lifetime of a session.
 async fn run_connection(
     agent: acp::AcpAgent,
+    agent_key: &'static str,
     shared: Arc<Shared>,
     spec: SessionSpec,
     mut cmd_rx: mpsc::UnboundedReceiver<SessionCommand>,
@@ -622,6 +760,7 @@ async fn run_connection(
                         .lock()
                         .await
                         .insert(id, PendingPermission { decision_tx });
+                    shared.decision_wait_started();
 
                     shared.emit(RuntimeEvent::PermissionRequest {
                         task: shared.task(),
@@ -639,6 +778,7 @@ async fn run_connection(
                             scope: DenyScope::Instance,
                         });
                         spawn_shared.pending.lock().await.remove(&id);
+                        spawn_shared.decision_wait_ended();
                         let response = permission_response(&request, decision)?;
                         responder.respond(response)
                     })
@@ -717,8 +857,24 @@ async fn run_connection(
                 "acp bridge initialized"
             );
 
+            let mcp_servers = spec
+                .mcp_bridge
+                .as_ref()
+                .map(|bridge| bridge.servers.iter().map(acp_mcp_server).collect())
+                .unwrap_or_default();
             let session = cx
-                .send_request(NewSessionRequest::new(loop_shared.workspace.root.clone()))
+                .send_request(
+                    NewSessionRequest::new(loop_shared.workspace.root.clone())
+                        .mcp_servers(mcp_servers)
+                        .meta(session_meta(
+                            agent_key,
+                            &spec
+                                .mcp_bridge
+                                .iter()
+                                .flat_map(|b| b.servers.iter().map(McpServerEndpoint::name))
+                                .collect::<Vec<_>>(),
+                        )),
+                )
                 .block_task()
                 .await;
             let session = match session {
@@ -730,17 +886,18 @@ async fn run_connection(
             };
             let session_id = session.session_id.clone();
 
-            // "Surface, never silently drop" (see `ResumeSpec` docs): this
-            // adapter does not yet translate Bastion's MCP bridge spec into
-            // ACP `mcpServers`, so say so instead of pretending it applied.
-            if spec.mcp_bridge.is_some() {
-                loop_shared.emit(RuntimeEvent::Warning {
-                    task: TaskId(0),
-                    code: WarnCode::DegradedTransport,
-                    detail: "mcp_bridge is not yet translated into ACP mcpServers; \
-                             the session was opened without it"
-                        .to_string(),
-                });
+            if let Some(mode) = asking_mode(agent_key, session.modes.as_ref()) {
+                let set = cx
+                    .send_request(SetSessionModeRequest::new(session_id.clone(), mode))
+                    .block_task()
+                    .await;
+                if let Err(e) = set {
+                    // A session that would not ask is not one Bastion governs.
+                    let _ = ready_tx.send(Err(format!(
+                        "could not switch the session to its asking mode: {e}"
+                    )));
+                    return Ok(());
+                }
             }
 
             let _ = ready_tx.send(Ok(session_id.clone()));
@@ -793,6 +950,36 @@ async fn run_connection(
     }
 }
 
+/// The ACP form of one Bastion MCP endpoint. The agent connects to it itself,
+/// so a confined session needs the endpoint reachable from inside its sandbox
+/// (a loopback URL under a networked profile, or a command the sandbox can run).
+fn acp_mcp_server(endpoint: &McpServerEndpoint) -> McpServer {
+    match endpoint {
+        McpServerEndpoint::Http { name, url, headers } => McpServer::Http(
+            McpServerHttp::new(name.clone(), url.clone()).headers(
+                headers
+                    .iter()
+                    .map(|(k, v)| HttpHeader::new(k.clone(), v.clone()))
+                    .collect(),
+            ),
+        ),
+        McpServerEndpoint::Stdio {
+            name,
+            command,
+            args,
+            env,
+        } => McpServer::Stdio(
+            McpServerStdio::new(name.clone(), command.clone())
+                .args(args.clone())
+                .env(
+                    env.iter()
+                        .map(|(k, v)| EnvVariable::new(k.clone(), v.clone()))
+                        .collect(),
+                ),
+        ),
+    }
+}
+
 /// Runs one `session/prompt` turn under the per-task timeout watchdog.
 async fn run_turn(
     cx: acp::ConnectionTo<acp::Agent>,
@@ -808,8 +995,32 @@ async fn run_turn(
         vec![ContentBlock::Text(TextContent::new(text))],
     );
 
-    let outcome = match tokio::time::timeout(timeout, cx.send_request(request).block_task()).await {
-        Ok(Ok(response)) => match response.stop_reason {
+    shared.reset_decision_wait();
+    let started = std::time::Instant::now();
+    let response = cx.send_request(request).block_task();
+    tokio::pin!(response);
+    // The watchdog budget excludes time spent waiting on a permission decision
+    // (see `Shared::decision_wait`), so the deadline is recomputed each time
+    // the timer fires instead of being fixed at the start.
+    let finished = loop {
+        let (waited, waiting) = shared.decision_wait();
+        let remaining = (timeout + waited).saturating_sub(started.elapsed());
+        if remaining.is_zero() && !waiting {
+            break None;
+        }
+        let nap = if waiting {
+            remaining.max(Duration::from_millis(500))
+        } else {
+            remaining
+        };
+        tokio::select! {
+            result = &mut response => break Some(result),
+            _ = tokio::time::sleep(nap) => {}
+        }
+    };
+
+    let outcome = match finished {
+        Some(Ok(response)) => match response.stop_reason {
             StopReason::EndTurn | StopReason::MaxTokens | StopReason::MaxTurnRequests => {
                 TaskOutcome::Success
             }
@@ -824,10 +1035,10 @@ async fn run_turn(
                 reason: format!("unrecognized stop reason: {other:?}"),
             },
         },
-        Ok(Err(e)) => TaskOutcome::Failed {
+        Some(Err(e)) => TaskOutcome::Failed {
             reason: format!("prompt failed: {e}"),
         },
-        Err(_) => {
+        None => {
             // Our own watchdog, not the caller's cancel: tell the agent to stop,
             // then report `TimedOut` — never `Cancelled`, which would conflate
             // the two (A-05 §5.4).

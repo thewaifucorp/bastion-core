@@ -229,6 +229,16 @@ pub struct AgentLoop {
     /// post-construction via [`AgentLoop::with_auth_resolver`], same
     /// discipline as `backend_profile`/`runtime_registry`/`permission_gate`.
     pub auth_resolver: Arc<dyn AuthResolver>,
+    /// Harness sessions kept alive between runtime-backed conversation
+    /// turns, keyed by Bastion session id (`agent::runtime_turn`).
+    pub(crate) live_runtime_sessions: tokio::sync::Mutex<
+        std::collections::HashMap<String, crate::agent::runtime_turn::LiveRuntimeSession>,
+    >,
+    /// How long a live harness session may sit idle before it is closed.
+    pub runtime_session_idle: std::time::Duration,
+    /// Bastion MCP servers handed to runtime-backed sessions
+    /// ([`AgentLoop::with_runtime_mcp_bridge`]). `None` = no bridge.
+    pub runtime_mcp_bridge: Option<crate::agent::runtime_turn::RuntimeMcpBridge>,
 }
 
 impl AgentLoop {
@@ -324,6 +334,9 @@ impl AgentLoop {
             // because unlike permission requests there was never a prior
             // check to preserve the failure mode of.
             auth_resolver: Arc::new(crate::capability::NullAuthResolver),
+            live_runtime_sessions: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+            runtime_session_idle: crate::agent::runtime_turn::DEFAULT_RUNTIME_SESSION_IDLE,
+            runtime_mcp_bridge: None,
         }
     }
 
@@ -515,7 +528,7 @@ impl AgentLoop {
     /// Returns `(parts, stable_prefix_len)` — `parts[..stable_prefix_len]` is the
     /// turn-invariant leading run (see [`AgentLoop::build_system_prompt_with_cache_boundary`]
     /// for how callers use this).
-    async fn build_context_parts_for_destination(
+    pub(crate) async fn build_context_parts_for_destination(
         &self,
         owner: &str,
         turn_msg: &str,
@@ -559,239 +572,6 @@ impl AgentLoop {
         (parts, stable_prefix_len)
     }
 
-    /// Ciclo 2.4 (`docs/SUPPORT-MATRIX.md` §3, mode 2):
-    /// runtime-backed primary conversation — the harness owns this turn's
-    /// tool-loop; Bastion stays owner of identity/memory/channels/supervision
-    /// (the caller appends the returned text to the session; this function
-    /// only produces it) and of OTel correlation (the existing `invoke_agent`
-    /// root span already wraps this whole call — no additional harness-side
-    /// trace-context handoff is attempted this cycle, since neither shipped
-    /// adapter's protocol has a slot for one).
-    ///
-    /// Permission requests from the harness are audited into the SAME
-    /// `PermissionGate`/`permission_queue` mode 3's consumer uses (Loop 3-A,
-    /// 6a) — but this function runs synchronously inside ONE turn (the
-    /// daemon serializes through a single `&mut agent`, docs/ARCHITECTURE.md
-    /// architecture law), so it cannot block waiting for a LATER turn's
-    /// plain-language "sim"/"não" to resolve a freshly-raised request without
-    /// freezing every other owner's turn for the wait's duration — the exact
-    /// thing 6a's design forbids. A request here always gets
-    /// `PermissionDecision::Deny { scope: DenyScope::Turn }` immediately —
-    /// fail-closed, the same Turn-scoped-denial semantics the Model path's
-    /// own `dispatch_tool_loop` already applies. Genuine cross-turn PAUSE
-    /// (enqueue, wait, resolve by a LATER turn via
-    /// `AgentLoop::respond_permission`) is mode 3's consumer only
-    /// (`spawn_delegated_task_consumer`, an independently-spawned tokio task
-    /// that never holds `&mut agent`) — see its rustdoc.
-    async fn run_runtime_backed_turn(
-        &mut self,
-        runtime_id: &str,
-        user_input: &str,
-        owner: &str,
-        session_id: &str,
-    ) -> anyhow::Result<String> {
-        let runtime = self
-            .runtime_registry
-            .resolve(runtime_id)
-            .await
-            .map_err(|e| anyhow::Error::new(BastionError::BackendUnavailable(e.to_string())))?;
-
-        // §3 mode 2: egress-filtered context, judged against the ACTUAL
-        // destination (the harness id) — REUSE of the same mechanism/tier
-        // rules the Model path's system prompt uses, via
-        // `build_context_parts_for_destination` (not a new check).
-        let (context_parts, _stable_prefix_len) = self
-            .build_context_parts_for_destination(owner, user_input, None, runtime_id)
-            .await;
-        let mut prompt = context_parts.join("\n\n");
-        if !prompt.is_empty() {
-            prompt.push_str("\n\n");
-        }
-        prompt.push_str(user_input);
-
-        let _ = tokio::fs::create_dir_all(runtime_workspace_root(
-            self.runtime_workspace_base.as_deref(),
-            owner,
-        ))
-        .await;
-        let (spec, timeout, permissions, env) = build_runtime_session_spec(
-            owner,
-            runtime_id,
-            &self.backend_profile,
-            self.runtime_workspace_base.as_deref(),
-        );
-
-        // M4-07: verify the resolved AuthProfileRef is actually usable
-        // BEFORE attempting start/resume — typed, fail-closed, no secret
-        // material ever crosses this boundary (see AuthResolver's rustdoc).
-        self.auth_resolver
-            .resolve(&spec.auth)
-            .await
-            .map_err(|e| anyhow::Error::new(BastionError::BackendUnavailable(e.to_string())))?;
-
-        // Restart recovery (design doc §3 mode 2): reuse a persisted handle
-        // for this Bastion session if the adapter can genuinely reattach.
-        // A resume failure (no handle, NotResumable, dead process) is not
-        // fatal to the turn — it just means a fresh harness-side session
-        // begins; logged, never silent.
-        let persisted = self.session.load_runtime_handle(session_id).await?;
-        let mut session = match persisted {
-            Some(handle) if handle.runtime_id == runtime.descriptor().id => {
-                let resume_spec = bastion_agent_runtime::ResumeSpec {
-                    timeout,
-                    permissions,
-                    env,
-                };
-                match runtime.resume(&handle, resume_spec).await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        tracing::info!(
-                            event = "agent_runtime_resume_failed_starting_fresh",
-                            runtime_id = %runtime_id,
-                            session_id = %session_id,
-                            error = %e,
-                        );
-                        runtime.start(spec).await.map_err(|e| {
-                            anyhow::Error::new(BastionError::BackendUnavailable(e.to_string()))
-                        })?
-                    }
-                }
-            }
-            _ => runtime
-                .start(spec)
-                .await
-                .map_err(|e| anyhow::Error::new(BastionError::BackendUnavailable(e.to_string())))?,
-        };
-
-        // Persist the (possibly new) handle immediately — a crash between
-        // here and task completion still leaves a reattachable handle.
-        let handle = session.handle();
-        self.session
-            .save_runtime_handle(session_id, &handle)
-            .await?;
-
-        let task = session
-            .submit(bastion_agent_runtime::TaskInput {
-                prompt,
-                attachments: Vec::new(),
-                expected: bastion_agent_runtime::TaskExpectation::Conversation,
-                model_hint: None,
-            })
-            .await
-            .map_err(|e| anyhow::Error::new(BastionError::BackendUnavailable(e.to_string())))?;
-
-        let mut response_text = String::new();
-        let outcome = loop {
-            let Some(event) = session.next_event().await else {
-                anyhow::bail!(BastionError::BackendUnavailable(
-                    "runtime session event stream closed before the task ended".to_string()
-                ));
-            };
-            match event {
-                bastion_agent_runtime::RuntimeEvent::MessageDelta { task: t, text }
-                    if t == task =>
-                {
-                    response_text.push_str(&text);
-                }
-                bastion_agent_runtime::RuntimeEvent::PermissionRequest {
-                    task: t,
-                    id,
-                    action,
-                    detail,
-                    // `edits` (the proposed diff the harness attached to the
-                    // request) is deliberately not consumed here: this arm
-                    // resolves immediately and never shows anything to a human,
-                    // so a preview would have no reader. The product surface
-                    // that DOES ask a person reads it from the event itself.
-                    ..
-                } if t == task => {
-                    // 6a (docs/ARCHITECTURE.md §6a):
-                    // audited through the SAME `PermissionGate`/`permission_queue`
-                    // mode 3 uses (single source of truth for "what did a
-                    // harness ask permission for"), but resolved IMMEDIATELY —
-                    // never a genuine pause. This function runs synchronously
-                    // inside ONE turn; the daemon serializes through a single
-                    // `&mut agent` (docs/ARCHITECTURE.md architecture law), so pausing
-                    // here would freeze every other owner's turn for as long
-                    // as the wait lasted — exactly what 6a's design forbids
-                    // ("nenhuma espera síncrona segura o `&mut agent`").
-                    // Genuine cross-turn pause is mode 3's consumer only (an
-                    // independently-spawned tokio task, never holding
-                    // `&mut agent`) — see `spawn_delegated_task_consumer`.
-                    let now = now_nanos();
-                    let deny = bastion_agent_runtime::PermissionDecision::Deny {
-                        scope: bastion_agent_runtime::DenyScope::Turn,
-                    };
-                    match self
-                        .permission_gate
-                        .enqueue(owner, &handle, id, &action, &detail, now, now)
-                        .await
-                    {
-                        Ok(row_id) => {
-                            // Immediate resolve (no wait) — records the SAME
-                            // fail-closed decision the harness is about to
-                            // receive, keeping the audit trail consistent
-                            // with mode 3's timeout path.
-                            if let Err(e) = self.permission_gate.resolve(owner, row_id, deny).await
-                            {
-                                tracing::warn!(event = "agent_runtime_permission_resolve_failed", error = %e);
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(event = "agent_runtime_permission_audit_failed", error = %e);
-                        }
-                    }
-                    if let Err(e) = session.respond_permission(id, deny).await {
-                        tracing::warn!(event = "agent_runtime_respond_permission_failed", error = %e);
-                    }
-                }
-                bastion_agent_runtime::RuntimeEvent::Usage { task: t, delta } if t == task => {
-                    tracing::debug!(
-                        event = "agent_runtime_usage",
-                        runtime_id = %runtime_id,
-                        input_tokens = delta.input_tokens,
-                        output_tokens = delta.output_tokens,
-                    );
-                }
-                bastion_agent_runtime::RuntimeEvent::Warning { code, detail, .. } => {
-                    tracing::warn!(
-                        event = "agent_runtime_warning",
-                        runtime_id = %runtime_id,
-                        ?code,
-                        detail = %detail,
-                    );
-                }
-                bastion_agent_runtime::RuntimeEvent::Ended { task: t, outcome } if t == task => {
-                    break outcome;
-                }
-                // Started/ToolCall/ToolResult/Diff/Artifact/Thinking, and any
-                // event for a DIFFERENT task on this session (shouldn't occur
-                // — one task at a time on this path): observability-only this
-                // cycle (A-06 scope is the conversation proof); no product
-                // surface consumes tool telemetry or artifacts from a
-                // runtime-backed conversation turn yet.
-                _ => {}
-            }
-        };
-
-        match outcome {
-            bastion_agent_runtime::TaskOutcome::Success => Ok(response_text),
-            bastion_agent_runtime::TaskOutcome::Cancelled => {
-                anyhow::bail!(BastionError::BackendUnavailable(
-                    "runtime task was cancelled before completion".to_string()
-                ))
-            }
-            bastion_agent_runtime::TaskOutcome::TimedOut => {
-                anyhow::bail!(BastionError::BackendUnavailable(
-                    "runtime task timed out".to_string()
-                ))
-            }
-            bastion_agent_runtime::TaskOutcome::Failed { reason } => {
-                anyhow::bail!(BastionError::BackendUnavailable(reason))
-            }
-        }
-    }
-
     /// Ciclo 2.4 (design doc §3, mode 3): delegate a short coding task to
     /// `BackendProfile.task_runtime` — independent of the conversation
     /// backend (Model or Runtime); a `Model`-conversation owner can still
@@ -827,6 +607,7 @@ impl AgentLoop {
             &runtime_id,
             &self.backend_profile,
             self.runtime_workspace_base.as_deref(),
+            self.runtime_mcp_bridge_for(owner),
         );
 
         // M4-07: same fail-closed auth check as mode 2 — see its call site
@@ -939,6 +720,7 @@ impl AgentLoop {
             &handle.runtime_id,
             &self.backend_profile,
             self.runtime_workspace_base.as_deref(),
+            self.runtime_mcp_bridge_for(owner),
         );
 
         // M4-07: same fail-closed auth check as mode 2/delegate — see
@@ -1305,6 +1087,12 @@ impl AgentLoop {
         input: &str,
         owner: &str,
     ) -> Option<anyhow::Result<String>> {
+        // A harness turn parked on a permission request asked the question
+        // this reply is answering (`agent::runtime_turn`).
+        if self.has_parked_runtime_turn(owner).await {
+            return None;
+        }
+
         let queue = self.capability_registry.approval_gate().clone();
 
         let pending = match queue.pending_for_owner(owner).await {
@@ -1657,7 +1445,7 @@ impl AgentLoop {
             self.backend_profile.conversation.clone()
         {
             let text = self
-                .run_runtime_backed_turn(&runtime_id, user_input, owner, session_id)
+                .run_runtime_backed_turn(&runtime_id, user_input, owner, session_id, untrusted)
                 .await?;
             // Bastion stays owner of the conversation record even though the
             // harness owned this turn's tool-loop (design doc §3).
@@ -2583,7 +2371,10 @@ impl TurnKernel for AgentLoop {
 /// confinement root for a runtime-backed session/task, one directory per
 /// owner, under `base` ([`AgentLoop::runtime_workspace_base`]) or, when the
 /// host set none, `$TMPDIR/bastion-agent-runtime-workspaces`.
-fn runtime_workspace_root(base: Option<&std::path::Path>, owner: &str) -> std::path::PathBuf {
+pub(crate) fn runtime_workspace_root(
+    base: Option<&std::path::Path>,
+    owner: &str,
+) -> std::path::PathBuf {
     let base = base
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| std::env::temp_dir().join("bastion-agent-runtime-workspaces"));
@@ -2598,11 +2389,12 @@ fn runtime_workspace_root(base: Option<&std::path::Path>, owner: &str) -> std::p
 /// itself — `workspace`/`sandbox` are deliberately NOT part of `ResumeSpec`
 /// (see its rustdoc in `bastion-agent-runtime`: fixed by the original
 /// session, not re-appliable on reattach).
-fn build_runtime_session_spec(
+pub(crate) fn build_runtime_session_spec(
     owner: &str,
     runtime_id: &str,
     backend_profile: &BackendProfile,
     workspace_base: Option<&std::path::Path>,
+    mcp_bridge: Option<bastion_agent_runtime::McpBridgeSpec>,
 ) -> (
     bastion_agent_runtime::SessionSpec,
     bastion_agent_runtime::TimeoutPolicy,
@@ -2641,7 +2433,7 @@ fn build_runtime_session_spec(
         runtime_id: runtime_id.to_string(),
         timeout,
         env: env.clone(),
-        mcp_bridge: None,
+        mcp_bridge,
         otel: bastion_agent_runtime::OtelContext::default(),
         model_hint: None,
     };
@@ -4365,5 +4157,292 @@ mod tests {
                 panic!("pending item matched neither delegated task's key: {item:?}");
             }
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Runtime-backed conversation (`agent::runtime_turn`): a scripted
+    // harness that asks permission before every edit. Each task streams a
+    // line, raises one permission request, and then either reports the edit
+    // (Allow) or ends cancelled (Deny).
+    // ------------------------------------------------------------------
+
+    #[derive(Default)]
+    struct AskerLog {
+        starts: u32,
+        prompts: Vec<String>,
+    }
+
+    struct AskerRuntime(Arc<std::sync::Mutex<AskerLog>>);
+
+    struct AskerSession {
+        log: Arc<std::sync::Mutex<AskerLog>>,
+        queue: std::collections::VecDeque<bastion_agent_runtime::RuntimeEvent>,
+        task: u64,
+    }
+
+    #[async_trait]
+    impl bastion_agent_runtime::AgentRuntime for AskerRuntime {
+        fn descriptor(&self) -> bastion_agent_runtime::RuntimeDescriptor {
+            let mut descriptor = FakeDelegateRuntime.descriptor();
+            descriptor.id = "fake_asker";
+            descriptor
+        }
+
+        async fn health(
+            &self,
+        ) -> Result<bastion_agent_runtime::RuntimeHealth, bastion_agent_runtime::RuntimeError>
+        {
+            FakeDelegateRuntime.health().await
+        }
+
+        async fn start(
+            &self,
+            _spec: bastion_agent_runtime::SessionSpec,
+        ) -> Result<
+            Box<dyn bastion_agent_runtime::RuntimeSession>,
+            bastion_agent_runtime::RuntimeError,
+        > {
+            self.0.lock().unwrap().starts += 1;
+            Ok(Box::new(AskerSession {
+                log: self.0.clone(),
+                queue: Default::default(),
+                task: 0,
+            }))
+        }
+
+        async fn resume(
+            &self,
+            _handle: &bastion_agent_runtime::SessionHandle,
+            _spec: bastion_agent_runtime::ResumeSpec,
+        ) -> Result<
+            Box<dyn bastion_agent_runtime::RuntimeSession>,
+            bastion_agent_runtime::RuntimeError,
+        > {
+            Err(bastion_agent_runtime::RuntimeError::NotResumable(
+                "fake: no reattach".to_string(),
+            ))
+        }
+    }
+
+    #[async_trait]
+    impl bastion_agent_runtime::RuntimeSession for AskerSession {
+        fn handle(&self) -> bastion_agent_runtime::SessionHandle {
+            bastion_agent_runtime::SessionHandle {
+                runtime_id: "fake_asker".to_string(),
+                owner: "alice".to_string(),
+                external_ref: "asker-1".to_string(),
+            }
+        }
+
+        async fn submit(
+            &mut self,
+            input: bastion_agent_runtime::TaskInput,
+        ) -> Result<bastion_agent_runtime::TaskId, bastion_agent_runtime::RuntimeError> {
+            use bastion_agent_runtime::*;
+            self.log.lock().unwrap().prompts.push(input.prompt);
+            self.task += 1;
+            let task = TaskId(self.task);
+            self.queue.push_back(RuntimeEvent::MessageDelta {
+                task,
+                text: "Vou criar o arquivo.".to_string(),
+            });
+            self.queue.push_back(RuntimeEvent::PermissionRequest {
+                task,
+                id: PermissionRequestId(self.task),
+                action: PermissionAction::WriteFile,
+                detail: "Write notes.txt".to_string(),
+                edits: vec![ProposedEdit {
+                    path: "notes.txt".into(),
+                    old_text: Some("old\n".to_string()),
+                    new_text: "new\n".to_string(),
+                    truncated: false,
+                }],
+            });
+            Ok(task)
+        }
+
+        async fn next_event(&mut self) -> Option<bastion_agent_runtime::RuntimeEvent> {
+            self.queue.pop_front()
+        }
+
+        async fn steer(&mut self, _text: &str) -> Result<(), bastion_agent_runtime::RuntimeError> {
+            Ok(())
+        }
+
+        async fn cancel(
+            &mut self,
+            _mode: bastion_agent_runtime::CancelMode,
+        ) -> Result<(), bastion_agent_runtime::RuntimeError> {
+            Ok(())
+        }
+
+        async fn respond_permission(
+            &mut self,
+            _id: bastion_agent_runtime::PermissionRequestId,
+            decision: bastion_agent_runtime::PermissionDecision,
+        ) -> Result<(), bastion_agent_runtime::RuntimeError> {
+            use bastion_agent_runtime::*;
+            let task = TaskId(self.task);
+            match decision {
+                PermissionDecision::Allow => {
+                    self.queue.push_back(RuntimeEvent::ToolCall {
+                        task,
+                        name: "Write".to_string(),
+                        input_digest: String::new(),
+                    });
+                    self.queue.push_back(RuntimeEvent::Diff {
+                        task,
+                        path: "notes.txt".into(),
+                        added: 1,
+                        removed: 1,
+                    });
+                    self.queue.push_back(RuntimeEvent::MessageDelta {
+                        task,
+                        text: " Feito.".to_string(),
+                    });
+                    self.queue.push_back(RuntimeEvent::Ended {
+                        task,
+                        outcome: TaskOutcome::Success,
+                    });
+                }
+                PermissionDecision::Deny { .. } => {
+                    self.queue.push_back(RuntimeEvent::Ended {
+                        task,
+                        outcome: TaskOutcome::Cancelled,
+                    });
+                }
+            }
+            Ok(())
+        }
+
+        async fn status(
+            &self,
+        ) -> Result<bastion_agent_runtime::SessionStatus, bastion_agent_runtime::RuntimeError>
+        {
+            Ok(bastion_agent_runtime::SessionStatus::Idle)
+        }
+    }
+
+    async fn asker_loop(db: &str) -> (AgentLoop, Arc<std::sync::Mutex<AskerLog>>) {
+        let log = Arc::new(std::sync::Mutex::new(AskerLog::default()));
+        let mut registry = crate::agent::backend::RuntimeRegistry::new();
+        registry.register(Arc::new(AskerRuntime(log.clone())));
+        let agent = make_loop(db)
+            .await
+            .with_backend_profile(crate::agent::backend::BackendProfile {
+                conversation: ConversationBackend::Runtime("fake_asker".to_string()),
+                ..Default::default()
+            })
+            .with_runtime_registry(registry)
+            .with_permission_gate(Arc::new(crate::capability::SqlitePermissionGate::new(db)));
+        (agent, log)
+    }
+
+    async fn pending_permissions(agent: &AgentLoop) -> usize {
+        agent
+            .permission_gate
+            .pending_for_owner("alice")
+            .await
+            .unwrap()
+            .len()
+    }
+
+    #[tokio::test]
+    async fn a_harness_permission_request_parks_the_turn_and_sim_continues_it() {
+        let f = NamedTempFile::new().unwrap();
+        let (mut agent, log) = asker_loop(f.path().to_str().unwrap()).await;
+
+        let asked = agent.run_turn_for("cria o arquivo", "alice").await.unwrap();
+        assert!(asked.starts_with("Vou criar o arquivo."), "{asked}");
+        assert!(
+            asked.contains(
+                "**O fake_asker pede permissão para escrever em arquivo:** Write notes.txt"
+            ),
+            "{asked}"
+        );
+        assert!(asked.contains("```diff\n-old\n+new\n```"), "{asked}");
+        assert_eq!(pending_permissions(&agent).await, 1, "recorded in the gate");
+
+        let done = agent.run_turn_for("sim", "alice").await.unwrap();
+        assert_eq!(
+            done,
+            "Vou criar o arquivo. Feito.\n\n— fake_asker: editou `notes.txt` (+1 −1); \
+             1 chamada de ferramenta."
+        );
+        assert_eq!(pending_permissions(&agent).await, 0, "resolved in the gate");
+
+        // The next message reuses the same harness session.
+        agent.run_turn_for("de novo", "alice").await.unwrap();
+        let log = log.lock().unwrap();
+        assert_eq!(
+            log.starts, 1,
+            "one harness session for the whole conversation"
+        );
+        assert_eq!(log.prompts.len(), 2, "the approval itself is not a prompt");
+    }
+
+    #[tokio::test]
+    async fn nao_denies_the_parked_request() {
+        let f = NamedTempFile::new().unwrap();
+        let (mut agent, _log) = asker_loop(f.path().to_str().unwrap()).await;
+
+        agent.run_turn_for("cria o arquivo", "alice").await.unwrap();
+        let denied = agent.run_turn_for("não", "alice").await.unwrap();
+        assert_eq!(
+            denied,
+            "Vou criar o arquivo.\n\nNegado. O fake_asker parou esta tarefa."
+        );
+        assert_eq!(pending_permissions(&agent).await, 0);
+    }
+
+    #[tokio::test]
+    async fn any_other_message_denies_the_request_and_becomes_the_next_prompt() {
+        let f = NamedTempFile::new().unwrap();
+        let (mut agent, log) = asker_loop(f.path().to_str().unwrap()).await;
+
+        agent.run_turn_for("cria o arquivo", "alice").await.unwrap();
+        let next = agent
+            .run_turn_for("usa outro nome de arquivo", "alice")
+            .await
+            .unwrap();
+        assert!(
+            next.starts_with("(Pedido de permissão anterior negado.)\n\nVou criar o arquivo."),
+            "{next}"
+        );
+        let log = log.lock().unwrap();
+        assert_eq!(log.starts, 1);
+        assert_eq!(log.prompts.len(), 2);
+        assert!(log.prompts[1].ends_with("usa outro nome de arquivo"));
+    }
+
+    #[tokio::test]
+    async fn untrusted_input_never_answers_a_parked_request() {
+        let f = NamedTempFile::new().unwrap();
+        let (mut agent, _log) = asker_loop(f.path().to_str().unwrap()).await;
+
+        agent.run_turn_for("cria o arquivo", "alice").await.unwrap();
+        let reply = agent
+            .run_turn_for_with_trust("sim", "alice", true)
+            .await
+            .unwrap();
+        assert!(reply.contains("canal autenticado"), "{reply}");
+        assert_eq!(pending_permissions(&agent).await, 1, "still waiting");
+
+        let done = agent.run_turn_for("sim", "alice").await.unwrap();
+        assert!(done.contains("Feito."), "{done}");
+    }
+
+    #[tokio::test]
+    async fn an_expired_request_is_denied_not_approved() {
+        let f = NamedTempFile::new().unwrap();
+        let (agent, _log) = asker_loop(f.path().to_str().unwrap()).await;
+        let mut agent = agent.with_permission_timeout(std::time::Duration::from_millis(10));
+
+        agent.run_turn_for("cria o arquivo", "alice").await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        let reply = agent.run_turn_for("sim", "alice").await.unwrap();
+        assert!(reply.contains("expirou e foi negado"), "{reply}");
+        assert!(!reply.contains("Feito."), "{reply}");
+        assert_eq!(pending_permissions(&agent).await, 0);
     }
 }

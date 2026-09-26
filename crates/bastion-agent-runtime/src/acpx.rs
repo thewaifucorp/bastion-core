@@ -375,6 +375,20 @@ impl AgentRuntime for AcpxAgentRuntime {
         let _ = tx.send(RuntimeEvent::Started {
             handle: handle.clone(),
         });
+        // acpx has no way to hand the wrapped agent extra MCP servers; say so
+        // rather than let the caller believe the bridge applied.
+        if spec
+            .mcp_bridge
+            .as_ref()
+            .is_some_and(|b| !b.servers.is_empty())
+        {
+            let _ = tx.send(RuntimeEvent::Warning {
+                task: TaskId(0),
+                code: WarnCode::DegradedTransport,
+                detail: "mcp_bridge ignored: acpx cannot pass MCP servers to the wrapped agent"
+                    .to_string(),
+            });
+        }
 
         Ok(Box::new(AcpxSession {
             acpx_bin: self.acpx_bin.clone(),

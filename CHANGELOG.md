@@ -7,6 +7,69 @@ version).
 
 ## Unreleased
 
+## 0.6.0 — 2026-09-26
+
+Repo tag `v0.6.0`. `bastion-agent-runtime` 0.2.1 → 0.3.0 (`McpBridgeSpec`
+changed shape) and `bastion-runtime` 0.3.0 → 0.4.0 (new public fields on
+`AgentLoop`) set the minor.
+
+### Added
+
+- **`bastion-runtime` 0.4.0 — runtime-backed conversation that asks before it
+  acts.** New `agent::runtime_turn`:
+  - One live harness session per Bastion session, kept between turns
+    (`AgentLoop::live_runtime_sessions`), so an adapter that cannot reattach
+    (`acp_*`) keeps its context for the whole conversation. Sessions idle past
+    `runtime_session_idle` (30 min, `with_runtime_session_idle`) are closed.
+  - A harness permission request **parks the turn** instead of being denied on
+    the spot: it is recorded in the `PermissionGate`, the turn answers with the
+    request and a compact diff of the proposed edit (changed lines only, cut
+    previews labelled as cut), and the owner's next message decides. "sim"
+    continues the same harness turn; "não" denies it; any other message denies
+    it and is sent as the next prompt; a message with both a yes and a no is a
+    no. Untrusted input never answers a request. A request left for
+    `permission_timeout` (10 min) is denied — a late "sim" reads "expired",
+    never a new prompt. The capability approval intercept yields while a
+    harness turn is parked, so the reply goes to the question just asked.
+  - Finished turns are recorded with a line naming the files the harness
+    edited (`+added −removed`) and how many tools it called.
+  - `AgentLoop::with_runtime_mcp_bridge(RuntimeMcpBridge)` supplies MCP
+    endpoints per owner; mode 2 and mode 3 sessions receive them in
+    `SessionSpec::mcp_bridge`.
+- **`bastion-agent-runtime` 0.3.0 — MCP bridge and patient approvals.**
+  `McpBridgeSpec { servers: Vec<McpServerEndpoint> }` with `Http { name, url,
+  headers }` and `Stdio { name, command, args, env }` (`Debug` prints header
+  and variable names, never their values). `AcpAgentRuntime` passes them to the
+  agent as ACP `mcpServers` on `session/new`; `AcpxAgentRuntime` and
+  `CodexAppServerRuntime` emit a `Warning` saying the bridge was not applied.
+  The ACP per-task watchdog no longer counts time spent waiting on a
+  permission decision.
+- **`acp_claude` sessions are Bastion's, not the operator's Claude Code.**
+  Measured live: `claude-agent-acp` loads the operator's whole Claude Code
+  setup into the session — settings with their permission `allow` rules and
+  `defaultMode`, hooks, plugins, skills, every MCP server on the account — and
+  Claude Code's auto memory writes under `~/.claude` without asking. Any of
+  that answers or skips a permission request before Bastion sees it. The
+  Claude bridge now gets `_meta.claudeCode.options = { settingSources: [],
+  strictMcpConfig: true, allowedTools: ["mcp__<bridged server>"] }`,
+  `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, and `session/set_mode` to `default`
+  when the bridge starts in another mode (a session that cannot be switched
+  fails to open). Only the MCP servers Bastion bridged are pre-allowed: their
+  calls are decided by Bastion's own policy server-side. The login is not a
+  setting and keeps working. Other bridges are untouched. `tests/acp_fake_bridge.rs` drives the adapter against a
+  scripted ACP agent (`tests/fixtures/fake_acp_agent.py`): `mcpServers` on the
+  wire, allow/reject option selection, a decision three times longer than the
+  task budget still completing, and the Claude isolation options, variable
+  and mode switch (absent for other bridges).
+
+### Changed
+
+- **Breaking:** `McpBridgeSpec::servers` is `Vec<McpServerEndpoint>` (was
+  `Vec<String>` of names nothing consumed).
+- Runtime-backed conversation turns no longer answer permission requests with
+  an immediate `Deny { scope: Turn }`; see above. `docs/SUPPORT-MATRIX.md`
+  documents mode 2 and the `acp_*` adapters.
+
 ## 0.5.0 — 2026-09-26
 
 Repo tag `v0.5.0`. `bastion-runtime` 0.2.6 → 0.3.0 (new public field) sets

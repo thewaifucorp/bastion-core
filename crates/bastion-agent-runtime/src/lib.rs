@@ -247,11 +247,68 @@ pub struct EnvPolicy {
 }
 
 /// Wiring of Bastion MCP servers into the harness, so memory/skills stay
-/// reachable inside the delegated loop.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// reachable inside the delegated loop. Each server is a concrete endpoint the
+/// harness connects to itself; whatever it calls there still goes through
+/// Bastion's own policy (capability registry, egress, approval) on the server
+/// side — the bridge adds reach, never authority.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct McpBridgeSpec {
-    /// Server names as configured in Bastion, exposed to the harness.
-    pub servers: Vec<String>,
+    pub servers: Vec<McpServerEndpoint>,
+}
+
+/// One MCP server handed to a harness session.
+///
+/// Header and environment values routinely carry a credential (the
+/// `x-bastion-token` bound to the session's owner), so `Debug` prints their
+/// names only. The spec is built per session and never persisted.
+#[derive(Clone, Serialize, Deserialize)]
+pub enum McpServerEndpoint {
+    /// Streamable HTTP server the harness reaches by URL.
+    Http {
+        name: String,
+        url: String,
+        headers: BTreeMap<String, String>,
+    },
+    /// Server the harness spawns itself and talks to over stdio.
+    Stdio {
+        name: String,
+        command: PathBuf,
+        args: Vec<String>,
+        env: BTreeMap<String, String>,
+    },
+}
+
+impl McpServerEndpoint {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Http { name, .. } | Self::Stdio { name, .. } => name,
+        }
+    }
+}
+
+impl std::fmt::Debug for McpServerEndpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Http { name, url, headers } => f
+                .debug_struct("Http")
+                .field("name", name)
+                .field("url", url)
+                .field("headers", &headers.keys().collect::<Vec<_>>())
+                .finish(),
+            Self::Stdio {
+                name,
+                command,
+                args,
+                env,
+            } => f
+                .debug_struct("Stdio")
+                .field("name", name)
+                .field("command", command)
+                .field("args", args)
+                .field("env", &env.keys().collect::<Vec<_>>())
+                .finish(),
+        }
+    }
 }
 
 /// OTel correlation context linking harness spans to the delegating turn.
