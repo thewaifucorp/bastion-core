@@ -8,9 +8,15 @@ struct agent/identity.rs:IdentityProvider
 fn agent/identity.rs:new
 struct agent/memory_rag.rs:MemoryRagProvider
 fn agent/memory_rag.rs:new
+const agent/memory_tools.rs:IDENTITY_TAG
+struct agent/memory_tools.rs:MemoryRevokeCapability
+struct agent/memory_tools.rs:MemoryStoreCapability
+fn agent/memory_tools.rs:memory_capabilities
+fn agent/memory_tools.rs:new
 mod agent/mod.rs:dream
 mod agent/mod.rs:identity
 mod agent/mod.rs:memory_rag
+mod agent/mod.rs:memory_tools
 mod agent/mod.rs:procedural
 mod agent/mod.rs:procedural_outcome
 struct agent/procedural.rs:ProceduralBeliefProvider

@@ -1,5 +1,7 @@
-fn anthropic.rs:new
-fn anthropic.rs:with_api_key
+fn anthropic/mod.rs:bedrock
+fn anthropic/mod.rs:from_env
+fn anthropic/mod.rs:vertex
+fn anthropic/mod.rs:with_api_key
 const codex.rs:BROWSER_CALLBACK_FALLBACK_PORT
 const codex.rs:BROWSER_CALLBACK_PATH
 const codex.rs:BROWSER_CALLBACK_PORT
