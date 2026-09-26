@@ -7,6 +7,10 @@ version).
 
 ## Unreleased
 
+## 0.4.1 — 2026-09-26
+
+Repo tag `v0.4.1`: only `bastion-providers` advanced, by a patch.
+
 ### Added
 
 - **`bastion-providers::codex` — browser login (authorization code + PKCE over a
