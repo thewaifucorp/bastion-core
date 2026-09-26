@@ -35,3 +35,5 @@ tracing         = "0.1"
 # an in-process rmcp server over a tokio::io::duplex pair.
 axum     = "0.8.9"
 tempfile = "3"
+# tests/unix_socket.rs serves a real streamable-HTTP MCP server on a Unix socket.
+rmcp     = { version = "1.6", features = ["server", "transport-streamable-http-server"] }

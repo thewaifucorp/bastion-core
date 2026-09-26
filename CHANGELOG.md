@@ -61,6 +61,13 @@ version).
   `McpClient::connect_from_config`) only carries a `url`, so the stdio path is
   unreachable from product config; this hardens it before it is exposed.
   `bastion-mcp` advances to `0.2.1`.
+- **MCP servers on Unix sockets.** `url = "unix:/abs/path.sock"` in
+  `[mcp.servers.<name>]` speaks the same streamable-HTTP protocol over that
+  socket (`http://localhost/mcp` inside it), through rmcp's reqwest client with
+  `unix_socket`. No TCP port: only a process that can open the socket file
+  reaches the server — how a native install runs its sidecars with no network
+  at all. Relative socket paths are rejected. `tests/unix_socket.rs` connects
+  to a real rmcp streamable-HTTP server behind axum on a socket.
 
 ### Added
 

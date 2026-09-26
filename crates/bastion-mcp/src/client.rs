@@ -419,9 +419,39 @@ async fn connect_sse(
             _ => tracing::warn!(header = %name, "invalid custom header name/value, skipping"),
         }
     }
-    let transport = StreamableHttpClientTransport::from_config(config);
+    let transport = match unix_socket_path(uri) {
+        Some(socket) => {
+            // Same streamable-HTTP protocol, carried over a Unix socket: no
+            // TCP port, so nothing but a process that can open the socket
+            // file (its directory is 0700) reaches the server. The host part
+            // is ignored by the socket connector; the path is MCP's `/mcp`.
+            config.uri = UNIX_SOCKET_MCP_URI.into();
+            let client = reqwest::Client::builder()
+                .unix_socket(socket)
+                .build()
+                .map_err(|e| anyhow::anyhow!("MCP unix socket client for {uri}: {e}"))?;
+            StreamableHttpClientTransport::with_client(client, config)
+        }
+        None => StreamableHttpClientTransport::from_config(config),
+    };
     let service: RunningService<RoleClient, ()> = ().serve(transport).await?;
     Ok(service)
+}
+
+/// Scheme for an MCP server listening on a Unix socket:
+/// `url = "unix:/abs/path/server.sock"` in `[mcp.servers.<name>]`.
+pub const UNIX_SOCKET_SCHEME: &str = "unix:";
+
+/// The HTTP URI requested over the socket.
+const UNIX_SOCKET_MCP_URI: &str = "http://localhost/mcp";
+
+/// The socket path of a `unix:` server URL. Only absolute paths: a relative
+/// one would resolve against the daemon's working directory, which is not
+/// where a sidecar put its socket.
+fn unix_socket_path(uri: &str) -> Option<std::path::PathBuf> {
+    let path = uri.strip_prefix(UNIX_SOCKET_SCHEME)?;
+    let path = std::path::Path::new(path);
+    path.is_absolute().then(|| path.to_path_buf())
 }
 
 /// Resolve a config string that may reference an env var as `${VAR_NAME}`.
@@ -447,6 +477,16 @@ fn resolve_secret(raw: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::StdioLaunch;
+
+    #[test]
+    fn unix_socket_urls_need_an_absolute_path() {
+        assert_eq!(
+            super::unix_socket_path("unix:/run/bastion/mem.sock"),
+            Some(std::path::PathBuf::from("/run/bastion/mem.sock"))
+        );
+        assert_eq!(super::unix_socket_path("unix:relative.sock"), None);
+        assert_eq!(super::unix_socket_path("http://localhost:8001/mcp"), None);
+    }
 
     fn fake_env(key: &str) -> Option<String> {
         match key {
