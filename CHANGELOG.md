@@ -7,6 +7,53 @@ version).
 
 ## Unreleased
 
+## 0.6.1 — 2026-09-26
+
+Repo tag `v0.6.1`. Patch only: `bastion-providers` 0.2.6 → 0.2.7,
+`bastion-cognition` 0.2.1 → 0.2.2, `bastion-runtime` 0.4.0 → 0.4.1 (all
+additive).
+
+### Added
+
+- **Claude on Amazon Bedrock and Google Vertex AI in the native loop
+  (`bastion-providers` 0.2.7).** `bedrock/<model id>` and `vertex/<model id>`
+  resolve to the Anthropic provider over those endpoints — Bastion keeps its
+  own tool loop, prompt caching and approvals, and pays per token through the
+  cloud account.
+  - **Bedrock** (`InvokeModel`): a Bedrock API key
+    (`AWS_BEARER_TOKEN_BEDROCK`), or SigV4 (`aws-sigv4`) with keys from the
+    environment, the profile's static keys in the shared credentials file, or
+    `aws configure export-credentials` (SSO, assumed roles,
+    `credential_process`; cached until shortly before expiry). Region from
+    `AWS_REGION`/`AWS_DEFAULT_REGION`; `AWS_ENDPOINT_URL_BEDROCK_RUNTIME`
+    overrides the host. The model id is percent-encoded as one path segment.
+  - **Vertex** (`streamRawPredict`): Application Default Credentials — a
+    service-account key (RS256 JWT signed locally with `ring`, exchanged at
+    its `token_uri`), a `gcloud auth application-default login`
+    (`authorized_user`, refresh token), or the metadata server; tokens cached.
+    Project from `ANTHROPIC_VERTEX_PROJECT_ID`/`GOOGLE_CLOUD_PROJECT` or the
+    credentials file, region `CLOUD_ML_REGION` (default `global`).
+  - `name()` is `bedrock`/`vertex`: both are cloud destinations for the
+    egress gate and are costed like the Anthropic API.
+  - `src/anthropic/endpoint_tests.rs` runs all three endpoints against a local
+    fake vendor (URL, auth, body, reply parsing, token caching, error status).
+- **`memory_store` / `memory_revoke` capabilities (`bastion-cognition`
+  0.2.2, `agent::memory_tools`).** The identity onboarding has always told
+  the agent to save its identity with `memory_store`, which no path
+  registered — every agent was asked for an identity forever. Both act on the
+  caller's owner only; a core belief is refused unless it is the identity
+  (`persona_tag = "identity"`), so an injected instruction cannot become
+  permanent; `memory_revoke` needs the owner's approval; the tier is explicit
+  (identity `cloud_ok`, anything else `local_only` by default).
+
+### Fixed
+
+- The direct Anthropic path no longer writes every streamed token to the
+  daemon's stdout (`print!`), no longer drops a server-sent event split across
+  two network reads (a split `input_json_delta` silently corrupted a tool
+  call's arguments), and returns an error instead of panicking when
+  `ANTHROPIC_API_KEY` is unset. `ANTHROPIC_BASE_URL` overrides the host.
+
 ## 0.6.0 — 2026-09-26
 
 Repo tag `v0.6.0`. `bastion-agent-runtime` 0.2.1 → 0.3.0 (`McpBridgeSpec`
