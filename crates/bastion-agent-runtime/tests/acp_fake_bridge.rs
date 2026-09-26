@@ -42,8 +42,15 @@ fn spec(root: &Path, per_task: Duration, bridge: Option<McpBridgeSpec>) -> Sessi
     }
 }
 
+fn fixture() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake_acp_agent.py")
+}
+
 fn runtime(python: &str, log: &Path) -> AcpAgentRuntime {
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake_acp_agent.py");
+    runtime_for(python, &fixture(), log)
+}
+
+fn runtime_for(python: &str, script: &Path, log: &Path) -> AcpAgentRuntime {
     AcpAgentRuntime::new(format!(
         "{python} '{}' '{}'",
         script.display(),
@@ -191,4 +198,69 @@ async fn a_denial_selects_the_reject_option() {
     )
     .await;
     assert_eq!(text, "selected:reject");
+}
+
+/// The Claude Code bridge gets a session Bastion governs: none of the
+/// operator's Claude Code settings or MCP servers, no auto memory, the mode
+/// that asks before editing even when the bridge starts in another, and only
+/// Bastion's own bridged server pre-allowed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_claude_bridge_session_is_isolated_and_asks() {
+    let Some(python) = python() else {
+        eprintln!("skipping: python3 not found");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("log.json");
+    // The adapter recognizes the agent family from the command line.
+    let script = dir.path().join("claude-agent-acp-fake.py");
+    std::os::unix::fs::symlink(fixture(), &script).unwrap();
+
+    let bridge = McpBridgeSpec {
+        servers: vec![McpServerEndpoint::Http {
+            name: "bastion".to_string(),
+            url: "http://127.0.0.1:1/mcp".to_string(),
+            headers: BTreeMap::new(),
+        }],
+    };
+    let session = runtime_for(python, &script, &log)
+        .start(spec(dir.path(), Duration::from_secs(30), Some(bridge)))
+        .await
+        .unwrap();
+    assert_eq!(session.handle().runtime_id, "acp_claude");
+    drop(session);
+
+    let record: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&log).unwrap()).unwrap();
+    assert_eq!(
+        record["meta"],
+        serde_json::json!({"claudeCode": {"options": {
+            "settingSources": [],
+            "strictMcpConfig": true,
+            "allowedTools": ["mcp__bastion"]
+        }}})
+    );
+    assert_eq!(record["autoMemoryOff"], "1");
+    assert_eq!(record["setMode"], "default");
+}
+
+/// Any other bridge is left as configured.
+#[tokio::test(flavor = "multi_thread")]
+async fn other_bridges_get_no_claude_options() {
+    let Some(python) = python() else {
+        eprintln!("skipping: python3 not found");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("log.json");
+    let session = runtime(python, &log)
+        .start(spec(dir.path(), Duration::from_secs(30), None))
+        .await
+        .unwrap();
+    drop(session);
+    let record: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&log).unwrap()).unwrap();
+    assert!(record["meta"].is_null());
+    assert!(record["autoMemoryOff"].is_null());
+    assert!(record.get("setMode").is_none());
 }

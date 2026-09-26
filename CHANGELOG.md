@@ -43,10 +43,24 @@ changed shape) and `bastion-runtime` 0.3.0 → 0.4.0 (new public fields on
   agent as ACP `mcpServers` on `session/new`; `AcpxAgentRuntime` and
   `CodexAppServerRuntime` emit a `Warning` saying the bridge was not applied.
   The ACP per-task watchdog no longer counts time spent waiting on a
-  permission decision. `tests/acp_fake_bridge.rs` drives the adapter against a
+  permission decision.
+- **`acp_claude` sessions are Bastion's, not the operator's Claude Code.**
+  Measured live: `claude-agent-acp` loads the operator's whole Claude Code
+  setup into the session — settings with their permission `allow` rules and
+  `defaultMode`, hooks, plugins, skills, every MCP server on the account — and
+  Claude Code's auto memory writes under `~/.claude` without asking. Any of
+  that answers or skips a permission request before Bastion sees it. The
+  Claude bridge now gets `_meta.claudeCode.options = { settingSources: [],
+  strictMcpConfig: true, allowedTools: ["mcp__<bridged server>"] }`,
+  `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, and `session/set_mode` to `default`
+  when the bridge starts in another mode (a session that cannot be switched
+  fails to open). Only the MCP servers Bastion bridged are pre-allowed: their
+  calls are decided by Bastion's own policy server-side. The login is not a
+  setting and keeps working. Other bridges are untouched. `tests/acp_fake_bridge.rs` drives the adapter against a
   scripted ACP agent (`tests/fixtures/fake_acp_agent.py`): `mcpServers` on the
-  wire, allow/reject option selection, and a decision three times longer than
-  the task budget still completing.
+  wire, allow/reject option selection, a decision three times longer than the
+  task budget still completing, and the Claude isolation options, variable
+  and mode switch (absent for other bridges).
 
 ### Changed
 

@@ -86,13 +86,13 @@ use acp::schema::v1::{
     McpServerStdio, NewSessionRequest, PermissionOptionKind, PromptRequest, ReadTextFileRequest,
     ReadTextFileResponse, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, SelectedPermissionOutcome, SessionId, SessionNotification,
-    SessionUpdate, StopReason, TextContent, ToolCall, ToolCallContent, ToolCallStatus,
-    ToolCallUpdate, WriteTextFileRequest, WriteTextFileResponse,
+    SessionUpdate, SetSessionModeRequest, StopReason, TextContent, ToolCall, ToolCallContent,
+    ToolCallStatus, ToolCallUpdate, WriteTextFileRequest, WriteTextFileResponse,
 };
 use acp::schema::ProtocolVersion;
 use agent_client_protocol as acp;
 use async_trait::async_trait;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -174,6 +174,79 @@ fn approvals_for(agent_key: &str) -> ApprovalCoverage {
     }
 }
 
+/// Variables a bridge's agent gets on top of its own configuration.
+///
+/// Claude Code keeps an "auto memory" it writes to under `~/.claude` without
+/// asking — pre-approved by Claude Code itself, so never a permission request
+/// Bastion sees. Bastion owns memory in a Bastion session; the feature is off.
+fn agent_env(agent_key: &str) -> BTreeMap<String, String> {
+    match agent_key {
+        "claude" => BTreeMap::from([(
+            "CLAUDE_CODE_DISABLE_AUTO_MEMORY".to_string(),
+            "1".to_string(),
+        )]),
+        _ => BTreeMap::new(),
+    }
+}
+
+/// `session/new` `_meta` for a bridge that reads options from it.
+///
+/// `claude-agent-acp` would otherwise load the operator's own Claude Code
+/// setup — user/project/local settings with their permission `allow` rules
+/// and hooks, plugins, skills, and every MCP server the account has — into a
+/// session Bastion is supposed to govern. An `allow` rule there answers a
+/// permission request before Bastion ever sees it. `settingSources: []` loads
+/// none of it and `strictMcpConfig` keeps only the servers Bastion passed.
+/// The login itself is unaffected: it is not a setting.
+///
+/// The one thing pre-allowed is the MCP servers Bastion itself bridged in
+/// (`bridged`): every call there is already decided by Bastion's own policy on
+/// the server side (egress, and the approval queue for capabilities that need
+/// one), so asking again in the harness would be the same question twice.
+fn session_meta(agent_key: &str, bridged: &[&str]) -> Option<acp::schema::v1::Meta> {
+    match agent_key {
+        "claude" => {
+            let allowed: Vec<String> = bridged.iter().map(|name| format!("mcp__{name}")).collect();
+            serde_json::json!({
+                "claudeCode": {
+                    "options": {
+                        "settingSources": [],
+                        "strictMcpConfig": true,
+                        "allowedTools": allowed
+                    }
+                }
+            })
+            .as_object()
+            .cloned()
+        }
+        _ => None,
+    }
+}
+
+/// The session mode under which the bridge asks before acting, when it is not
+/// already the current one. `claude-agent-acp` picks its initial mode from the
+/// operator's `permissions.defaultMode` (read regardless of `settingSources`),
+/// and `acceptEdits` or `bypassPermissions` there would skip Bastion's approval
+/// for every edit.
+fn asking_mode(
+    agent_key: &str,
+    modes: Option<&acp::schema::v1::SessionModeState>,
+) -> Option<acp::schema::v1::SessionModeId> {
+    let wanted = match agent_key {
+        "claude" => "default",
+        _ => return None,
+    };
+    let modes = modes?;
+    if modes.current_mode_id.0.as_ref() == wanted {
+        return None;
+    }
+    modes
+        .available_modes
+        .iter()
+        .find(|m| m.id.0.as_ref() == wanted)
+        .map(|m| m.id.clone())
+}
+
 /// Adapter for one ACP agent bridge. Cheap to construct; sessions are
 /// independent processes.
 #[derive(Debug, Clone)]
@@ -216,8 +289,19 @@ impl AcpAgentRuntime {
     fn session_agent(&self, spec: &SessionSpec) -> Result<acp::AcpAgent, RuntimeError> {
         let agent = acp::AcpAgent::from_str(&self.command)
             .map_err(|e| RuntimeError::Unavailable(format!("cannot spawn bridge: {e}")))?;
+        let extra_env = agent_env(self.agent_key);
         if self.confinement.is_none() || spec.sandbox == SandboxProfile::Trusted {
-            return Ok(agent);
+            if extra_env.is_empty() {
+                return Ok(agent);
+            }
+            let config = agent.config();
+            let mut env = config.environment().clone();
+            env.extend(extra_env);
+            return Ok(acp::AcpAgent::new(
+                acp::AcpAgentConfig::new(config.command().to_path_buf())
+                    .args(config.arguments().iter().cloned())
+                    .envs(env),
+            ));
         }
         let config = agent.config();
         let bin = if config.command().components().count() > 1 {
@@ -236,6 +320,7 @@ impl AcpAgentRuntime {
         // Variables the bridge's own config set, then the session's allow
         // list on top — nothing else of the daemon's environment.
         let mut env = config.environment().clone();
+        env.extend(extra_env);
         env.extend(spec.env.allow.clone());
         let launch = confine::launch(
             self.confinement.as_ref(),
@@ -374,6 +459,7 @@ impl AgentRuntime for AcpAgentRuntime {
 
         tokio::spawn(run_connection(
             agent,
+            self.agent_key,
             shared.clone(),
             spec.clone(),
             cmd_rx,
@@ -619,6 +705,7 @@ impl Shared {
 /// Drives one bridge connection for the lifetime of a session.
 async fn run_connection(
     agent: acp::AcpAgent,
+    agent_key: &'static str,
     shared: Arc<Shared>,
     spec: SessionSpec,
     mut cmd_rx: mpsc::UnboundedReceiver<SessionCommand>,
@@ -778,7 +865,15 @@ async fn run_connection(
             let session = cx
                 .send_request(
                     NewSessionRequest::new(loop_shared.workspace.root.clone())
-                        .mcp_servers(mcp_servers),
+                        .mcp_servers(mcp_servers)
+                        .meta(session_meta(
+                            agent_key,
+                            &spec
+                                .mcp_bridge
+                                .iter()
+                                .flat_map(|b| b.servers.iter().map(McpServerEndpoint::name))
+                                .collect::<Vec<_>>(),
+                        )),
                 )
                 .block_task()
                 .await;
@@ -790,6 +885,20 @@ async fn run_connection(
                 }
             };
             let session_id = session.session_id.clone();
+
+            if let Some(mode) = asking_mode(agent_key, session.modes.as_ref()) {
+                let set = cx
+                    .send_request(SetSessionModeRequest::new(session_id.clone(), mode))
+                    .block_task()
+                    .await;
+                if let Err(e) = set {
+                    // A session that would not ask is not one Bastion governs.
+                    let _ = ready_tx.send(Err(format!(
+                        "could not switch the session to its asking mode: {e}"
+                    )));
+                    return Ok(());
+                }
+            }
 
             let _ = ready_tx.send(Ok(session_id.clone()));
             *loop_shared.status.lock().await = SessionStatus::Idle;

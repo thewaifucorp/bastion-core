@@ -8,6 +8,7 @@ to the JSON file named by argv[1].
 """
 
 import json
+import os
 import sys
 
 log_path = sys.argv[1]
@@ -55,8 +56,28 @@ while True:
         })
     elif method == "session/new":
         record["mcpServers"] = message["params"].get("mcpServers", [])
+        record["meta"] = message["params"].get("_meta")
+        record["autoMemoryOff"] = os.environ.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY")
         save()
-        send({"jsonrpc": "2.0", "id": message["id"], "result": {"sessionId": "s1"}})
+        send({
+            "jsonrpc": "2.0",
+            "id": message["id"],
+            "result": {
+                "sessionId": "s1",
+                # Starts where an operator's `defaultMode: acceptEdits` would.
+                "modes": {
+                    "currentModeId": "acceptEdits",
+                    "availableModes": [
+                        {"id": "default", "name": "Default"},
+                        {"id": "acceptEdits", "name": "Accept Edits"},
+                    ],
+                },
+            },
+        })
+    elif method == "session/set_mode":
+        record["setMode"] = message["params"]["modeId"]
+        save()
+        send({"jsonrpc": "2.0", "id": message["id"], "result": {}})
     elif method == "session/prompt":
         cwd_file = "/tmp/fake-acp-target.txt"
         next_id += 1
