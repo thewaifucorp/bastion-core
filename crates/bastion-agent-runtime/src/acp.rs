@@ -81,12 +81,13 @@ use crate::conformance::FaultInjection;
 use crate::util::sha256_digest;
 use crate::*;
 use acp::schema::v1::{
-    CancelNotification, ClientCapabilities, ContentBlock, ContentChunk, Diff,
-    FileSystemCapabilities, InitializeRequest, NewSessionRequest, PermissionOptionKind,
-    PromptRequest, ReadTextFileRequest, ReadTextFileResponse, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionId,
-    SessionNotification, SessionUpdate, StopReason, TextContent, ToolCall, ToolCallContent,
-    ToolCallStatus, ToolCallUpdate, WriteTextFileRequest, WriteTextFileResponse,
+    CancelNotification, ClientCapabilities, ContentBlock, ContentChunk, Diff, EnvVariable,
+    FileSystemCapabilities, HttpHeader, InitializeRequest, McpServer, McpServerHttp,
+    McpServerStdio, NewSessionRequest, PermissionOptionKind, PromptRequest, ReadTextFileRequest,
+    ReadTextFileResponse, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, SelectedPermissionOutcome, SessionId, SessionNotification,
+    SessionUpdate, StopReason, TextContent, ToolCall, ToolCallContent, ToolCallStatus,
+    ToolCallUpdate, WriteTextFileRequest, WriteTextFileResponse,
 };
 use acp::schema::ProtocolVersion;
 use agent_client_protocol as acp;
@@ -471,6 +472,19 @@ struct Shared {
     /// this adapter emitted no `Artifact` at all. `std::sync::Mutex` because
     /// the update path is synchronous and never awaits while holding it.
     tool_calls: std::sync::Mutex<HashMap<String, ToolCallState>>,
+    /// Time the current turn spent waiting on a permission decision. The
+    /// per-task watchdog does not count it: a person deciding is not the agent
+    /// being slow, and a timeout that fires while they read the diff would
+    /// turn every approval longer than the task budget into a failure.
+    decision_wait: std::sync::Mutex<DecisionWait>,
+}
+
+/// Bookkeeping for [`Shared::decision_wait`].
+#[derive(Default)]
+struct DecisionWait {
+    outstanding: usize,
+    since: Option<std::time::Instant>,
+    total: Duration,
 }
 
 /// Everything learned so far about one in-flight tool call.
@@ -502,6 +516,43 @@ impl Shared {
             status: AsyncMutex::new(SessionStatus::Idle),
             last_usage: AtomicU64::new(0),
             tool_calls: std::sync::Mutex::new(HashMap::new()),
+            decision_wait: std::sync::Mutex::new(DecisionWait::default()),
+        }
+    }
+
+    /// A permission request started waiting on a decision.
+    fn decision_wait_started(&self) {
+        let mut wait = self.decision_wait.lock().unwrap_or_else(|e| e.into_inner());
+        if wait.outstanding == 0 {
+            wait.since = Some(std::time::Instant::now());
+        }
+        wait.outstanding += 1;
+    }
+
+    /// A permission request got its decision (or was abandoned).
+    fn decision_wait_ended(&self) {
+        let mut wait = self.decision_wait.lock().unwrap_or_else(|e| e.into_inner());
+        wait.outstanding = wait.outstanding.saturating_sub(1);
+        if wait.outstanding == 0 {
+            if let Some(since) = wait.since.take() {
+                wait.total += since.elapsed();
+            }
+        }
+    }
+
+    /// Time spent waiting on decisions so far this turn, and whether a
+    /// decision is being waited on right now.
+    fn decision_wait(&self) -> (Duration, bool) {
+        let wait = self.decision_wait.lock().unwrap_or_else(|e| e.into_inner());
+        let ongoing = wait.since.map(|s| s.elapsed()).unwrap_or_default();
+        (wait.total + ongoing, wait.outstanding > 0)
+    }
+
+    fn reset_decision_wait(&self) {
+        let mut wait = self.decision_wait.lock().unwrap_or_else(|e| e.into_inner());
+        wait.total = Duration::ZERO;
+        if wait.outstanding > 0 {
+            wait.since = Some(std::time::Instant::now());
         }
     }
 
@@ -622,6 +673,7 @@ async fn run_connection(
                         .lock()
                         .await
                         .insert(id, PendingPermission { decision_tx });
+                    shared.decision_wait_started();
 
                     shared.emit(RuntimeEvent::PermissionRequest {
                         task: shared.task(),
@@ -639,6 +691,7 @@ async fn run_connection(
                             scope: DenyScope::Instance,
                         });
                         spawn_shared.pending.lock().await.remove(&id);
+                        spawn_shared.decision_wait_ended();
                         let response = permission_response(&request, decision)?;
                         responder.respond(response)
                     })
@@ -717,8 +770,16 @@ async fn run_connection(
                 "acp bridge initialized"
             );
 
+            let mcp_servers = spec
+                .mcp_bridge
+                .as_ref()
+                .map(|bridge| bridge.servers.iter().map(acp_mcp_server).collect())
+                .unwrap_or_default();
             let session = cx
-                .send_request(NewSessionRequest::new(loop_shared.workspace.root.clone()))
+                .send_request(
+                    NewSessionRequest::new(loop_shared.workspace.root.clone())
+                        .mcp_servers(mcp_servers),
+                )
                 .block_task()
                 .await;
             let session = match session {
@@ -729,19 +790,6 @@ async fn run_connection(
                 }
             };
             let session_id = session.session_id.clone();
-
-            // "Surface, never silently drop" (see `ResumeSpec` docs): this
-            // adapter does not yet translate Bastion's MCP bridge spec into
-            // ACP `mcpServers`, so say so instead of pretending it applied.
-            if spec.mcp_bridge.is_some() {
-                loop_shared.emit(RuntimeEvent::Warning {
-                    task: TaskId(0),
-                    code: WarnCode::DegradedTransport,
-                    detail: "mcp_bridge is not yet translated into ACP mcpServers; \
-                             the session was opened without it"
-                        .to_string(),
-                });
-            }
 
             let _ = ready_tx.send(Ok(session_id.clone()));
             *loop_shared.status.lock().await = SessionStatus::Idle;
@@ -793,6 +841,36 @@ async fn run_connection(
     }
 }
 
+/// The ACP form of one Bastion MCP endpoint. The agent connects to it itself,
+/// so a confined session needs the endpoint reachable from inside its sandbox
+/// (a loopback URL under a networked profile, or a command the sandbox can run).
+fn acp_mcp_server(endpoint: &McpServerEndpoint) -> McpServer {
+    match endpoint {
+        McpServerEndpoint::Http { name, url, headers } => McpServer::Http(
+            McpServerHttp::new(name.clone(), url.clone()).headers(
+                headers
+                    .iter()
+                    .map(|(k, v)| HttpHeader::new(k.clone(), v.clone()))
+                    .collect(),
+            ),
+        ),
+        McpServerEndpoint::Stdio {
+            name,
+            command,
+            args,
+            env,
+        } => McpServer::Stdio(
+            McpServerStdio::new(name.clone(), command.clone())
+                .args(args.clone())
+                .env(
+                    env.iter()
+                        .map(|(k, v)| EnvVariable::new(k.clone(), v.clone()))
+                        .collect(),
+                ),
+        ),
+    }
+}
+
 /// Runs one `session/prompt` turn under the per-task timeout watchdog.
 async fn run_turn(
     cx: acp::ConnectionTo<acp::Agent>,
@@ -808,8 +886,32 @@ async fn run_turn(
         vec![ContentBlock::Text(TextContent::new(text))],
     );
 
-    let outcome = match tokio::time::timeout(timeout, cx.send_request(request).block_task()).await {
-        Ok(Ok(response)) => match response.stop_reason {
+    shared.reset_decision_wait();
+    let started = std::time::Instant::now();
+    let response = cx.send_request(request).block_task();
+    tokio::pin!(response);
+    // The watchdog budget excludes time spent waiting on a permission decision
+    // (see `Shared::decision_wait`), so the deadline is recomputed each time
+    // the timer fires instead of being fixed at the start.
+    let finished = loop {
+        let (waited, waiting) = shared.decision_wait();
+        let remaining = (timeout + waited).saturating_sub(started.elapsed());
+        if remaining.is_zero() && !waiting {
+            break None;
+        }
+        let nap = if waiting {
+            remaining.max(Duration::from_millis(500))
+        } else {
+            remaining
+        };
+        tokio::select! {
+            result = &mut response => break Some(result),
+            _ = tokio::time::sleep(nap) => {}
+        }
+    };
+
+    let outcome = match finished {
+        Some(Ok(response)) => match response.stop_reason {
             StopReason::EndTurn | StopReason::MaxTokens | StopReason::MaxTurnRequests => {
                 TaskOutcome::Success
             }
@@ -824,10 +926,10 @@ async fn run_turn(
                 reason: format!("unrecognized stop reason: {other:?}"),
             },
         },
-        Ok(Err(e)) => TaskOutcome::Failed {
+        Some(Err(e)) => TaskOutcome::Failed {
             reason: format!("prompt failed: {e}"),
         },
-        Err(_) => {
+        None => {
             // Our own watchdog, not the caller's cancel: tell the agent to stop,
             // then report `TimedOut` — never `Cancelled`, which would conflate
             // the two (A-05 §5.4).
