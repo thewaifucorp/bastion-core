@@ -28,7 +28,9 @@ version).
   execs the target under the backend. `Sandbox::command` gives a
   `std::process::Command`; `Sandbox::launch` gives program/args/env for SDKs
   that spawn on their own (the ACP SDK). Variable values never go through
-  argv. No `unsafe`. `tests/confinement.rs` runs real programs under the host
+  argv. A program runs by the path it was given (a virtualenv's symlinked
+  `bin/python` keeps finding its venv), with its own and its symlink target's
+  directories readable. No `unsafe`. `tests/confinement.rs` runs real programs under the host
   backend (writable/read-only/hidden paths, home directory, exact
   environment, host loopback with the network blocked vs allowed);
   `BASTION_SANDBOX_TESTS_REQUIRED=1` turns "no backend" into a failure.

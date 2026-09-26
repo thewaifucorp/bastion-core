@@ -350,8 +350,8 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-/// The spec with every path canonicalized, and the program's own directory
-/// added to the readable set.
+/// The spec with every path canonicalized (the program excepted, see
+/// [`resolve`]), and the program's directories added to the readable set.
 #[derive(Debug, Default, PartialEq)]
 struct Resolved {
     program: PathBuf,
@@ -368,14 +368,26 @@ fn canonical(path: &Path) -> Result<PathBuf, SandboxError> {
 }
 
 fn resolve(spec: &SandboxSpec) -> Result<Resolved, SandboxError> {
-    let program = canonical(&spec.program)?;
+    // Executed by the path it was given, not its symlink target: a
+    // virtualenv's `bin/python` is a symlink, and Python finds the venv (its
+    // `pyvenv.cfg`, hence its site-packages) only next to the path it was
+    // invoked as. Both that directory and the target's are made readable.
+    let target = canonical(&spec.program)?;
+    let program = if spec.program.is_absolute() {
+        spec.program.clone()
+    } else {
+        target.clone()
+    };
     let mut read_only = spec
         .read_only
         .iter()
         .map(|p| canonical(p))
         .collect::<Result<Vec<_>, _>>()?;
-    if let Some(dir) = program.parent() {
-        read_only.push(dir.to_path_buf());
+    for dir in [program.parent(), target.parent()].into_iter().flatten() {
+        let dir = canonical(dir)?;
+        if !read_only.contains(&dir) {
+            read_only.push(dir);
+        }
     }
     let read_write = spec
         .read_write
@@ -839,6 +851,26 @@ mod tests {
             "{:?}",
             ok.read_only
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_program_runs_by_its_own_path_with_both_directories_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("install/bin");
+        let venv = dir.path().join("venv/bin");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::create_dir_all(&venv).unwrap();
+        std::fs::write(real.join("python3.12"), "").unwrap();
+        std::os::unix::fs::symlink(real.join("python3.12"), venv.join("python")).unwrap();
+        let resolved = resolve(&SandboxSpec::new(venv.join("python"))).unwrap();
+        assert_eq!(resolved.program, venv.join("python"));
+        assert!(resolved
+            .read_only
+            .contains(&std::fs::canonicalize(&venv).unwrap()));
+        assert!(resolved
+            .read_only
+            .contains(&std::fs::canonicalize(&real).unwrap()));
     }
 
     #[test]
