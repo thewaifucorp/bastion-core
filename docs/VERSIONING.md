@@ -14,7 +14,7 @@ hoc release by release: the git tag on this repo, and the product version of
 | Tier | Crates | Contract |
 |---|---|---|
 | **Kernel** | `bastion-types`, `bastion-runtime`, `bastion-memory` | Strict semver **once at 1.0**. Pre-1.0: see below. |
-| **Extensions** | `bastion-providers`, `bastion-mcp`, `bastion-agent-runtime`, `bastion-cognition`, `bastion-personas`, `bastion-mesh`, `bastion-extension-protocol`, `bastion-extension-wasm` | Semver-shaped but looser: 0.x for the foreseeable future; breaking changes land on a minor bump. |
+| **Extensions** | `bastion-providers`, `bastion-mcp`, `bastion-agent-runtime`, `bastion-cognition`, `bastion-personas`, `bastion-mesh`, `bastion-extension-protocol`, `bastion-extension-wasm`, `bastion-sandbox` | Semver-shaped but looser: 0.x for the foreseeable future; breaking changes land on a minor bump. |
 
 The kernel/extension split, the dependency allowlist between them, and the
 rationale for which crate hosts what are enforced by
@@ -174,6 +174,11 @@ Consequences, stated so they are not re-litigated:
 - Worked example, `v0.3.0`: `TurnKernel::run_tool_loop` gained a parameter and
   `bastion-types`/`bastion-runtime`/`bastion-personas` advanced their minor,
   so the repo tag advanced its minor too.
+- Worked example, `v0.7.0`: a new variant on `bastion_sandbox::Backend` (the
+  Windows backend) breaks an exhaustive `match`, so `bastion-sandbox` went
+  0.1.0 → 0.2.0 and the tag advanced its minor — even though no other crate
+  changed. The enum is `#[non_exhaustive]` from then on, so the next backend
+  is additive (a patch).
 
 ### 7.2 `bastion-agent`'s version is NOT derived
 

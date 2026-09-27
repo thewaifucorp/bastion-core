@@ -100,6 +100,7 @@ use capability/mod.rs:TurnCapabilityScope
 mod capability/mod.rs:approval
 mod capability/mod.rs:auth_resolver
 use capability/mod.rs:check_tool_allowed
+use capability/mod.rs:current_approval
 mod capability/mod.rs:permission_queue
 mod capability/mod.rs:registry
 mod capability/mod.rs:structured_output
@@ -113,6 +114,7 @@ struct capability/registry.rs:TaggedValue
 struct capability/registry.rs:TurnCapabilityScope
 fn capability/registry.rs:approval_gate
 fn capability/registry.rs:check_tool_allowed
+fn capability/registry.rs:current_approval
 fn capability/registry.rs:drain_all
 fn capability/registry.rs:invoke
 fn capability/registry.rs:is_empty

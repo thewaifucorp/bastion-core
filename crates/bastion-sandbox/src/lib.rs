@@ -9,7 +9,7 @@
 //! [`SandboxSpec`] is out of reach for the child, the operator's home
 //! directory included.
 //!
-//! Three backends, picked by [`Sandbox::detect`] in this order:
+//! Four backends; [`Sandbox::detect`] picks the first that works here:
 //!
 //! - **Linux — bubblewrap.** A fresh mount namespace whose root is an empty
 //!   tmpfs; only the system directories (`/usr`, `/etc`, the lib dirs, ...)
@@ -25,6 +25,15 @@
 //!   allows reading the system and the spec's paths, writing the spec's
 //!   writable paths, and the network only when allowed. Paths reach the
 //!   profile as `-D` parameters, never spliced into its text.
+//! - **Windows — AppContainer + Job Object.** The program runs with an
+//!   AppContainer's lowbox token (Low integrity, privileges stripped, every
+//!   access checked a second time against the container), which reaches only
+//!   what the system grants every AppContainer (reading `C:\Windows`,
+//!   `C:\Program Files`) and the spec's paths, granted to this container by
+//!   ACE. No network capability when blocked (loopback included); a Job
+//!   Object kills the whole tree with the helper and keeps it off other
+//!   processes' windows and the clipboard. Details in the `appcontainer`
+//!   module.
 //!
 //! Paths keep their real names in every backend (macOS cannot remap them), so
 //! a program's configuration that names an absolute path still works.
@@ -36,7 +45,8 @@
 //! host forwards to [`helper_main`] before doing anything else. The helper
 //! drops every environment variable the spec did not name, then execs the
 //! target under the backend (for Landlock, it confines its own process right
-//! before `exec`). One mechanism serves both [`Sandbox::command`] and
+//! before `exec`; on Windows, which has no `exec`, it creates the target in
+//! the AppContainer, waits for it and exits with its status). One mechanism serves both [`Sandbox::command`] and
 //! [`Sandbox::launch`] — the latter for SDKs that only take a program, its
 //! arguments and extra environment (the ACP SDK spawns its bridge that way,
 //! inheriting the whole daemon environment).
@@ -50,6 +60,8 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[cfg(any(windows, test))]
+mod appcontainer;
 #[cfg(target_os = "linux")]
 mod landlock_backend;
 
@@ -61,10 +73,13 @@ pub const HELPER_MARKER: &str = "__bastion-sandbox";
 pub enum Network {
     /// No network: on Linux a private network namespace (bubblewrap) or no
     /// Internet sockets (Landlock backend) — the host's `127.0.0.1` is not
-    /// reachable either way; on macOS every `network*` operation denied.
+    /// reachable either way; on macOS every `network*` operation denied; on
+    /// Windows an AppContainer without network capabilities.
     Blocked,
     /// The host's network, unfiltered. For harnesses that must reach their
     /// vendor's API; which destinations are acceptable is not decided here.
+    /// On Windows the host's loopback is reachable only when the helper runs
+    /// elevated (the loopback exemption is a machine setting).
     Allowed,
 }
 
@@ -114,7 +129,9 @@ impl SandboxSpec {
     }
 
     /// One variable of the child's environment. The environment is exactly
-    /// what is set here; nothing is inherited from the calling process.
+    /// what is set here; nothing is inherited from the calling process. (On
+    /// Windows the system adds `LOCALAPPDATA`, `TEMP` and `TMP`, pointing at
+    /// the AppContainer's own folder.)
     pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.env.insert(key.into(), value.into());
         self
@@ -160,8 +177,10 @@ impl SandboxSpec {
     }
 }
 
-/// The confinement mechanism in use on this host.
+/// The confinement mechanism in use on this host. New backends may be
+/// added, so a `match` needs a wildcard arm.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Backend {
     /// Path to a working `bwrap`.
     Bubblewrap(PathBuf),
@@ -169,6 +188,8 @@ pub enum Backend {
     Landlock,
     /// Path to `sandbox-exec`.
     Seatbelt(PathBuf),
+    /// An AppContainer inside a Job Object (Windows 10 and later).
+    AppContainer,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -332,7 +353,35 @@ fn probe(_helper: &Path) -> Result<Backend, String> {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+/// Runs `cmd.exe /c exit 0` through the helper in an AppContainer with the
+/// network blocked, so a Windows without AppContainers, or a helper that
+/// cannot create one, fails here.
+#[cfg(windows)]
+fn probe(helper: &Path) -> Result<Backend, String> {
+    let system_root = std::env::var_os("SystemRoot")
+        .or_else(|| std::env::var_os("windir"))
+        .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
+    let sandbox = Sandbox::with_backend(Backend::AppContainer, helper);
+    let output = sandbox
+        .command(
+            &SandboxSpec::new(system_root.join(r"System32\cmd.exe"))
+                .args(["/d", "/c", "exit 0"])
+                .env("SystemRoot", system_root.to_string_lossy()),
+        )
+        .map_err(|e| e.to_string())?
+        .output()
+        .map_err(|e| format!("cannot run the sandbox helper {}: {e}", helper.display()))?;
+    if output.status.success() {
+        Ok(Backend::AppContainer)
+    } else {
+        Err(format!(
+            "AppContainer: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn probe(_helper: &Path) -> Result<Backend, String> {
     Err(format!("no sandbox backend for {}", std::env::consts::OS))
 }
@@ -361,10 +410,13 @@ struct Resolved {
 }
 
 fn canonical(path: &Path) -> Result<PathBuf, SandboxError> {
-    std::fs::canonicalize(path).map_err(|source| SandboxError::InvalidPath {
+    let canonical = std::fs::canonicalize(path).map_err(|source| SandboxError::InvalidPath {
         path: path.to_path_buf(),
         source,
-    })
+    })?;
+    #[cfg(windows)]
+    let canonical = appcontainer::plain_path(&canonical);
+    Ok(canonical)
 }
 
 fn resolve(spec: &SandboxSpec) -> Result<Resolved, SandboxError> {
@@ -407,6 +459,7 @@ fn resolve(spec: &SandboxSpec) -> Result<Resolved, SandboxError> {
 // Helper protocol:
 //
 //   <HELPER_MARKER> --backend bwrap:<path> | landlock | seatbelt:<path>
+//                             | appcontainer
 //                   --net blocked|allowed [--cwd <path>]
 //                   (--ro <path>)* (--rw <path>)* (--keep <NAME>)*
 //                   -- <program> [args...]
@@ -429,6 +482,7 @@ fn helper_args(backend: &Backend, spec: &SandboxSpec, resolved: &Resolved) -> Ve
             s.push(path);
             s
         }
+        Backend::AppContainer => "appcontainer".into(),
     });
     args.push("--net".into());
     args.push(match spec.network {
@@ -489,6 +543,8 @@ fn parse_helper_args(args: impl IntoIterator<Item = OsString>) -> Result<HelperR
                 let value = value.to_string_lossy().into_owned();
                 backend = Some(if value == "landlock" {
                     Backend::Landlock
+                } else if value == "appcontainer" {
+                    Backend::AppContainer
                 } else if let Some(path) = value.strip_prefix("bwrap:") {
                     Backend::Bubblewrap(PathBuf::from(path))
                 } else if let Some(path) = value.strip_prefix("seatbelt:") {
@@ -589,6 +645,16 @@ fn exec_confined(request: HelperRequest) -> String {
             #[cfg(not(target_os = "linux"))]
             {
                 return "the Landlock backend exists only on Linux".to_string();
+            }
+        }
+        Backend::AppContainer => {
+            #[cfg(windows)]
+            {
+                return appcontainer::run(request.network, resolved, &request.args, &env);
+            }
+            #[cfg(not(windows))]
+            {
+                return "the AppContainer backend exists only on Windows".to_string();
             }
         }
     };
@@ -839,6 +905,7 @@ mod tests {
         assert!(profile.contains("(allow network-outbound)"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn resolve_rejects_a_missing_path_and_exposes_the_program_directory() {
         let err = resolve(&SandboxSpec::new("/usr/bin/env").read_only("/definitely/not/here"))
@@ -900,6 +967,24 @@ mod tests {
         assert_eq!(parsed.resolved, resolved);
         assert_eq!(parsed.keep, ["API_KEY"]);
         assert_eq!(parsed.args, [OsString::from("--x")]);
+    }
+
+    #[test]
+    fn helper_args_round_trip_the_appcontainer_backend() {
+        let spec = SandboxSpec::new(r"C:\Windows\System32\cmd.exe").env("SystemRoot", "root-value");
+        let resolved = Resolved {
+            program: PathBuf::from(r"C:\Windows\System32\cmd.exe"),
+            cwd: None,
+            read_only: vec![PathBuf::from(r"C:\Windows\System32")],
+            read_write: Vec::new(),
+        };
+        let args = helper_args(&Backend::AppContainer, &spec, &resolved);
+        assert!(!strings(&args).iter().any(|a| a.contains("root-value")));
+        let parsed = parse_helper_args(args).expect("parses");
+        assert_eq!(parsed.backend, Backend::AppContainer);
+        assert_eq!(parsed.network, Network::Blocked);
+        assert_eq!(parsed.resolved, resolved);
+        assert_eq!(parsed.keep, ["SystemRoot"]);
     }
 
     #[test]

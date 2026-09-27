@@ -420,6 +420,9 @@ async fn connect_sse(
         }
     }
     let transport = match unix_socket_path(uri) {
+        #[cfg(not(unix))]
+        Some(_) => anyhow::bail!("MCP server {uri}: unix: URLs need a Unix host"),
+        #[cfg(unix)]
         Some(socket) => {
             // Same streamable-HTTP protocol, carried over a Unix socket: no
             // TCP port, so nothing but a process that can open the socket
@@ -443,6 +446,7 @@ async fn connect_sse(
 pub const UNIX_SOCKET_SCHEME: &str = "unix:";
 
 /// The HTTP URI requested over the socket.
+#[cfg(unix)]
 const UNIX_SOCKET_MCP_URI: &str = "http://localhost/mcp";
 
 /// The socket path of a `unix:` server URL. Only absolute paths: a relative
@@ -478,6 +482,7 @@ fn resolve_secret(raw: Option<&str>) -> Option<String> {
 mod tests {
     use super::StdioLaunch;
 
+    #[cfg(unix)]
     #[test]
     fn unix_socket_urls_need_an_absolute_path() {
         assert_eq!(
