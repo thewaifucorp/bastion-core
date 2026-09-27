@@ -2,6 +2,8 @@
 //! server listening on a Unix socket — a real rmcp server behind axum, the
 //! same stack the sidecars' FastMCP speaks.
 
+#![cfg(unix)]
+
 use std::sync::Arc;
 
 use bastion_mcp::McpClient;
