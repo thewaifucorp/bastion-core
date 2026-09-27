@@ -16,6 +16,7 @@
 //! `bastion-personas` (the `.af` interop format spans goal + persona data;
 //! neither of those crates depends back on this one).
 
+pub mod devices;
 pub mod identity;
 pub mod interop;
 pub mod mesh;

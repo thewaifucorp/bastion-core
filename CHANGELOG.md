@@ -7,6 +7,82 @@ version).
 
 ## Unreleased
 
+### Added
+
+- **Remote capabilities on the owner's other devices (`bastion-mesh`
+  `devices`, BMD-08..12, BMD-15).** Slice 2 of `multi-device-brain-and-nodes`.
+  - `enrollment`: `DeviceId`, `Platform`, `Role { Primary { epoch } | Node
+    { replica } }`, `CapabilityGrant`/`GrantScope`, and `Enrollment` signed
+    by the owner key (`AgeIdentity`'s Ed25519, reused as device identity).
+    `DeviceRegistry::admit` needs the owner signature **and** an
+    `EnrollmentApproval` signed by a device already registered; grants start
+    empty and change only through a newer owner-signed revision; `revoke`
+    returns the `SecretGrant`s the device kept.
+  - `protocol`/`handshake`: `NodeToPrimary`/`PrimaryToNode` JSON frames and a
+    mutual Ed25519 challenge (the node verifies the primary's owner-signed
+    enrollment with nothing but the owner key; each proof names its side,
+    owner and device).
+  - `transport`: `FrameConn` over WebSocket (`tokio-tungstenite` + rustls)
+    or an in-process pair. The node side only has `connect` — nothing binds
+    (BMD-09).
+  - `node::NodeAgent`: refuses ungranted capabilities (`NotGranted`), a
+    `needs_approval` grant without approval, and any order or replica batch
+    from an older epoch (`StaleEpoch`, reported as `Rejected`); refuses a
+    primary whose `Welcome` is older than what it has seen; `NodeHandle::stop`
+    cancels running calls and disconnects; results that finish after a drop
+    are reported on the next connection; `RevocationHook` on `Revoked`.
+  - `hub::PrimaryHub` + `RemoteCapability`: a node's granted capabilities
+    register in the primary's `CapabilityRegistry` as `<device>_<capability>`
+    (provider tool-name alphabet; the spec's `pc-windows.ui.act` is
+    `pc-windows_ui_act`), so persona authority, egress and approval apply
+    before anything is sent (BMD-11); output is untrusted; a call whose
+    connection drops is `Unknown`, never success; dropping a call cancels it
+    on the node. Registered once per grant (the tool list is part of the
+    cached prompt prefix); offline → `Unavailable`.
+- **Replicate the memory to an authorized node (`bastion-mesh` `devices`,
+  BMD-16..18).** Slice 5.
+  - `log::EventLog`: the primary's event log (SQLite, gapless `seq`, epoch,
+    origin, hybrid logical clock) and the `GlobalId` ↔ local-id map;
+    `log::LoggedMemory` wraps the primary's `Memory` so every belief stored,
+    revoked or superseded becomes an event. Sessions, personas and config are
+    recorded by the host with `EventLog::record` (`PersonaChanged` and
+    `SessionAppended` gained an optional payload so a promoted replica has the
+    content, not only its digest).
+  - `replica_store::ReplicaStore`: the node's replica, an append-only file of
+    ChaCha20-Poly1305 records under a host-supplied key (the host keeps it in
+    the system vault); a wrong key or a tampered file does not open; batches
+    apply in order (duplicates skipped, gaps refused); `materialize` rebuilds
+    a `Memory` and continues the log at promotion.
+  - `replicate::spawn`: every new event to every connected replica node, and a
+    catch-up from the last acknowledged `seq` when a node connects.
+  - `secrets`: a granted secret is sealed (age) to the node's own secrets key
+    (`Enrollment::secrets_recipient`), only with a `SecretGrant` naming that
+    secret **and** that device; `SealedSecretStore` keeps ciphertext only;
+    `PrimaryToNode::Secrets` replaces the node's whole set (rotation, BMD-31);
+    events never carry secret values (BMD-18).
+- **Promote a node and reconcile the old primary (`bastion-mesh` `devices`,
+  BMD-19..24).** Slice 6.
+  - `fence::EpochFence`, shared by a primary's hub and event log: once it
+    learns a newer epoch exists (a node that saw it, or the host), the log
+    refuses every write and the hub every order — never two primaries writing
+    in one epoch (BMD-21); `may_refresh()` is the guard for credential
+    refresh (only the current epoch's primary refreshes, BMD-32).
+  - `DeviceRegistry::promote` (current epoch + 1, every other primary becomes
+    a node, `EpochStart { epoch, primary, after_seq }` recorded) and
+    `merge` (the higher epoch wins; revocations are never undone). Nothing
+    promotes on its own (BMD-20). The registry replicates to every node
+    (`PrimaryToNode::Registry`), so any node can be promoted from its copy.
+  - `reconcile::reconcile` + `ConflictQueue`: a returning ex-primary hands
+    over what it wrote in its epoch after the fork (`RequestProposals` /
+    `Proposals`, `EventLog` implements `ProposalSource`); stores, sessions,
+    personas and config are unioned; a revoke/supersede of a belief this side
+    also changed becomes a queued conflict with both versions kept until the
+    owner resolves it (`KeepOurs` / `TakeTheirs`).
+- `bastion_runtime::capability::current_approval()`: the approval-queue id of
+  the call being dispatched as the resolution of an owner's approval, so a
+  forwarding capability can pass it on.
+- `AgeIdentity::sign` / `verifying_key_bytes`.
+
 ## 0.7.0 — 2026-09-26
 
 Repo tag `v0.7.0`. `bastion-sandbox` 0.1.0 → 0.2.0 (`Backend` gained a
