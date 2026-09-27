@@ -7,6 +7,12 @@ version).
 
 ## Unreleased
 
+Repo tag `v0.7.0`. `bastion-sandbox` 0.1.0 → 0.2.0 (`Backend` gained a
+variant and is now `#[non_exhaustive]`) sets the minor bump on the tag; the
+rest is additive — `bastion-mesh` 0.1.0 → 0.1.1 (the `devices` module),
+`bastion-runtime` 0.4.1 → 0.4.2 (`current_approval`), `bastion-mcp` 0.2.1 →
+0.2.2, `bastion-agent-runtime` 0.3.0 → 0.3.1.
+
 ### Added
 
 - **Remote capabilities on the owner's other devices (`bastion-mesh`
