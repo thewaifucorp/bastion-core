@@ -42,6 +42,18 @@ pub fn check_tool_allowed(
     Ok(())
 }
 
+tokio::task_local! {
+    static CURRENT_APPROVAL: i64;
+}
+
+/// The approval-queue row id of the call being dispatched, when the
+/// dispatch is the resolution of an owner's approval (Policy 2), `None`
+/// otherwise. A capability that forwards the call elsewhere (a remote
+/// device) passes it along as proof the owner said yes.
+pub fn current_approval() -> Option<i64> {
+    CURRENT_APPROVAL.try_with(|id| *id).ok()
+}
+
 /// A capability is anything the agent can invoke through the registry.
 #[async_trait]
 pub trait Capability: Send + Sync {
@@ -352,7 +364,7 @@ impl CapabilityRegistry {
                 // resolution (triggered by Plan 11-04's NL intercept) — dispatch
                 // now and record the result for future idempotent-resume.
                 ApprovalOutcome::ApprovedPendingExecution(id) => {
-                    let result = cap.invoke(args, ctx).await?;
+                    let result = CURRENT_APPROVAL.scope(id, cap.invoke(args, ctx)).await?;
                     self.approval_gate.record_executed(id, &result).await?;
                     Ok(TaggedValue {
                         data: result,

@@ -136,6 +136,19 @@ impl AgeIdentity {
         engine.encode(self.verifying_key.to_bytes())
     }
 
+    /// The raw Ed25519 public key — the device key of an owner's device
+    /// (`bastion_mesh::devices`), or the owner key itself.
+    pub fn verifying_key_bytes(&self) -> [u8; 32] {
+        self.verifying_key.to_bytes()
+    }
+
+    /// Sign arbitrary bytes with this identity's Ed25519 key. Callers put a
+    /// domain separator in `message` so a signature for one purpose never
+    /// verifies for another.
+    pub fn sign(&self, message: &[u8]) -> [u8; 64] {
+        self.signing_key.sign(message).to_bytes()
+    }
+
     /// Sign an Agent Card and return the raw Ed25519 signature bytes.
     ///
     /// The signature covers all fields of `card` EXCEPT `signature`, serialised
@@ -196,7 +209,7 @@ fn agent_card_canonical_json(card: &AgentCard) -> anyhow::Result<String> {
 ///
 /// This is the deterministic canonical form used for signing: same input always
 /// produces identical bytes.
-fn canonical_json_string(value: &serde_json::Value) -> String {
+pub(crate) fn canonical_json_string(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::Object(map) => {
             let mut keys: Vec<&String> = map.keys().collect();
