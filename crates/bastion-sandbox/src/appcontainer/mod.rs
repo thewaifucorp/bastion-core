@@ -436,3 +436,53 @@ mod tests {
         assert_eq!(rights::map_generic(rights::DELETE), rights::DELETE);
     }
 }
+
+#[cfg(all(test, windows))]
+mod env_probe {
+    use super::*;
+
+    #[test]
+    fn which_variables_createprocess_needs() {
+        let container = win32::Sid::app_container("bastion.sandbox.envprobe").unwrap();
+        let root = std::env::var("SystemRoot").unwrap();
+        let cmd = std::path::PathBuf::from(&root).join(r"System32\cmd.exe");
+        let host = |k: &str| std::env::var(k).unwrap_or_default();
+        let sets: Vec<(&str, Vec<(&str, String)>)> = vec![
+            ("empty", vec![]),
+            ("systemroot", vec![("SystemRoot", root.clone())]),
+            ("localappdata", vec![("SystemRoot", root.clone()), ("LOCALAPPDATA", host("LOCALAPPDATA"))]),
+            ("userprofile", vec![("SystemRoot", root.clone()), ("USERPROFILE", host("USERPROFILE"))]),
+            ("temp", vec![("SystemRoot", root.clone()), ("TEMP", host("TEMP")), ("TMP", host("TMP"))]),
+            ("appdata", vec![("SystemRoot", root.clone()), ("APPDATA", host("APPDATA"))]),
+            ("all4", vec![("SystemRoot", root.clone()), ("LOCALAPPDATA", host("LOCALAPPDATA")), ("USERPROFILE", host("USERPROFILE")), ("TEMP", host("TEMP")), ("TMP", host("TMP"))]),
+            ("fullhost", std::env::vars().map(|(k, v)| (Box::leak(k.into_boxed_str()) as &str, v)).collect()),
+        ];
+        for (label, vars) in sets {
+            let vars: Vec<(Vec<u16>, Vec<u16>)> = vars
+                .iter()
+                .map(|(k, v)| (k.encode_utf16().collect(), v.encode_utf16().collect()))
+                .collect();
+            let block = environment_block(&vars).unwrap();
+            let mut line = Vec::new();
+            append_arg(&mut line, &"cmd.exe".encode_utf16().collect::<Vec<_>>());
+            append_arg(&mut line, &"/c".encode_utf16().collect::<Vec<_>>());
+            append_arg(&mut line, &"set".encode_utf16().collect::<Vec<_>>());
+            line.push(0);
+            let result = win32::spawn_suspended(win32::Spawn {
+                program: &cmd,
+                command_line: line,
+                environment: &block,
+                cwd: None,
+                container: &container,
+                capabilities: &[],
+            });
+            match result {
+                Ok(child) => {
+                    child.resume().unwrap();
+                    eprintln!("ENVPROBE {label}: ok exit={:?}", child.wait());
+                }
+                Err(e) => eprintln!("ENVPROBE {label}: {e}"),
+            }
+        }
+    }
+}
