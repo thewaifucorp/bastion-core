@@ -440,6 +440,39 @@ impl DeviceRegistry {
         Ok(())
     }
 
+    /// Let `device` keep the secret named `secret`, dormant until promotion
+    /// (§5.7, BMD-18): one grant per secret per device. Idempotent.
+    pub fn grant_secret(
+        &mut self,
+        device: &DeviceId,
+        secret: impl Into<String>,
+        at: i64,
+    ) -> Result<(), EnrollmentError> {
+        let device_id = device.clone();
+        let record = self.active_mut(device)?;
+        let secret = secret.into();
+        if !record.secret_grants.iter().any(|g| g.secret == secret) {
+            record.secret_grants.push(SecretGrant {
+                secret,
+                device: device_id,
+                granted_at: at,
+            });
+        }
+        Ok(())
+    }
+
+    /// Stop letting `device` keep `secret`.
+    pub fn ungrant_secret(
+        &mut self,
+        device: &DeviceId,
+        secret: &str,
+    ) -> Result<(), EnrollmentError> {
+        self.active_mut(device)?
+            .secret_grants
+            .retain(|g| g.secret != secret);
+        Ok(())
+    }
+
     /// Revoke a device. Returns the secrets it kept, which the owner should
     /// rotate (BMD-33). The record stays (revoked), so the device can never be
     /// re-admitted with the same id silently.
