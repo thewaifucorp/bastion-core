@@ -38,10 +38,16 @@
 //!   included, like `--die-with-parent`) and that has no access to other
 //!   processes' windows, the clipboard, global atoms or system settings; only
 //!   then does it resume.
-//! - **Environment.** Exactly the kept variables, as the child's environment
-//!   block — nothing of the helper's. Windows programs usually need
-//!   `SystemRoot` (Winsock does not start without it); the spec has to name
-//!   it, as it names `PATH`.
+//! - **Environment.** The kept variables, as the child's environment block —
+//!   nothing of the helper's — plus what Windows itself adds to every
+//!   AppContainer process: `LOCALAPPDATA`, `TEMP` and `TMP`, pointing at the
+//!   container's own folder (`%LOCALAPPDATA%\Packages\<container>\AC`),
+//!   which only that container can write. `CreateProcessW` refuses an
+//!   AppContainer whose block has no `LOCALAPPDATA` at all
+//!   (`ERROR_ENVVAR_NOT_FOUND`), so the helper puts a placeholder there when
+//!   the spec names none; Windows replaces its value. Windows programs usually
+//!   also need `SystemRoot` (Winsock does not start without it); the spec has
+//!   to name it, as it names `PATH`.
 //!
 //! The unsafe Win32 calls live in [`win32`], and only there.
 
@@ -62,6 +68,11 @@ const NETWORK_CAPABILITIES: &[&str] = &[
     "S-1-15-3-2", // internetClientServer
     "S-1-15-3-3", // privateNetworkClientServer
 ];
+
+/// The variable `CreateProcessW` needs in an AppContainer's environment
+/// block; it replaces the value with the container's folder.
+#[cfg_attr(not(windows), allow(dead_code))]
+const REQUIRED_VARIABLE: &str = "LOCALAPPDATA";
 
 /// "ALL APPLICATION PACKAGES": ACEs for it reach every AppContainer.
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -270,10 +281,19 @@ fn launch(
         append_arg(&mut command_line, &wide(arg));
     }
     command_line.push(0);
-    let vars: Vec<(Vec<u16>, Vec<u16>)> = env
+    let mut vars: Vec<(Vec<u16>, Vec<u16>)> = env
         .iter()
         .map(|(name, value)| (name.encode_utf16().collect(), wide(value)))
         .collect();
+    if !env
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case(REQUIRED_VARIABLE))
+    {
+        vars.push((
+            REQUIRED_VARIABLE.encode_utf16().collect(),
+            "set-by-windows".encode_utf16().collect(),
+        ));
+    }
     let environment = environment_block(&vars)?;
 
     let job = win32::Job::new()?;
@@ -434,55 +454,5 @@ mod tests {
             rights::FILE_ALL_ACCESS
         );
         assert_eq!(rights::map_generic(rights::DELETE), rights::DELETE);
-    }
-}
-
-#[cfg(all(test, windows))]
-mod env_probe {
-    use super::*;
-
-    #[test]
-    fn which_variables_createprocess_needs() {
-        let container = win32::Sid::app_container("bastion.sandbox.envprobe").unwrap();
-        let root = std::env::var("SystemRoot").unwrap();
-        let cmd = std::path::PathBuf::from(&root).join(r"System32\cmd.exe");
-        let host = |k: &str| std::env::var(k).unwrap_or_default();
-        let sets: Vec<(&str, Vec<(&str, String)>)> = vec![
-            ("empty", vec![]),
-            ("systemroot", vec![("SystemRoot", root.clone())]),
-            ("localappdata", vec![("SystemRoot", root.clone()), ("LOCALAPPDATA", host("LOCALAPPDATA"))]),
-            ("userprofile", vec![("SystemRoot", root.clone()), ("USERPROFILE", host("USERPROFILE"))]),
-            ("temp", vec![("SystemRoot", root.clone()), ("TEMP", host("TEMP")), ("TMP", host("TMP"))]),
-            ("appdata", vec![("SystemRoot", root.clone()), ("APPDATA", host("APPDATA"))]),
-            ("all4", vec![("SystemRoot", root.clone()), ("LOCALAPPDATA", host("LOCALAPPDATA")), ("USERPROFILE", host("USERPROFILE")), ("TEMP", host("TEMP")), ("TMP", host("TMP"))]),
-            ("fullhost", std::env::vars().map(|(k, v)| (Box::leak(k.into_boxed_str()) as &str, v)).collect()),
-        ];
-        for (label, vars) in sets {
-            let vars: Vec<(Vec<u16>, Vec<u16>)> = vars
-                .iter()
-                .map(|(k, v)| (k.encode_utf16().collect(), v.encode_utf16().collect()))
-                .collect();
-            let block = environment_block(&vars).unwrap();
-            let mut line = Vec::new();
-            append_arg(&mut line, &"cmd.exe".encode_utf16().collect::<Vec<_>>());
-            append_arg(&mut line, &"/c".encode_utf16().collect::<Vec<_>>());
-            append_arg(&mut line, &"set".encode_utf16().collect::<Vec<_>>());
-            line.push(0);
-            let result = win32::spawn_suspended(win32::Spawn {
-                program: &cmd,
-                command_line: line,
-                environment: &block,
-                cwd: None,
-                container: &container,
-                capabilities: &[],
-            });
-            match result {
-                Ok(child) => {
-                    child.resume().unwrap();
-                    eprintln!("ENVPROBE {label}: ok exit={:?}", child.wait());
-                }
-                Err(e) => eprintln!("ENVPROBE {label}: {e}"),
-            }
-        }
     }
 }

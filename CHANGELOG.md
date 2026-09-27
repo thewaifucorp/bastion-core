@@ -39,8 +39,13 @@ version changed.
   - **Job Object:** the tree dies with the helper (killed included) and has
     no access to other processes' windows, the clipboard, global atoms or
     system settings.
-  - **Environment:** exactly the spec's variables, as the child's environment
-    block. Windows programs usually need `SystemRoot`; the spec must name it.
+  - **Environment:** the spec's variables, as the child's environment block,
+    plus the three Windows adds to every AppContainer process —
+    `LOCALAPPDATA`, `TEMP`, `TMP`, pointing at the container's own folder,
+    writable by that container only (`CreateProcessW` refuses an
+    AppContainer launch whose block has no `LOCALAPPDATA`, so the helper puts
+    a placeholder that Windows replaces). Windows programs usually need
+    `SystemRoot`; the spec must name it.
   - The Win32 calls live in one module (`src/appcontainer/win32.rs`) with a
     `SAFETY` note on each block; the crate lint went from `forbid` to `deny`
     so that module alone can allow `unsafe_code`.

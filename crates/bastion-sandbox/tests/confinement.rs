@@ -199,6 +199,14 @@ fn the_environment_is_exactly_the_spec() {
     let env = stdout(&out);
     assert!(env.contains("DECLARED=yes"), "{env}");
     assert!(!env.contains("must-not-leak"), "{env}");
+    // Windows adds the container's own folder, never the operator's.
+    if cfg!(windows) {
+        let local = env
+            .lines()
+            .find_map(|line| line.strip_prefix("LOCALAPPDATA="))
+            .unwrap_or_default();
+        assert!(local.contains(r"\Packages\bastion.sandbox."), "{env}");
+    }
 }
 
 /// A program that connects to `127.0.0.1:port` and prints what the listener

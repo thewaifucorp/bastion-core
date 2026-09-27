@@ -129,7 +129,9 @@ impl SandboxSpec {
     }
 
     /// One variable of the child's environment. The environment is exactly
-    /// what is set here; nothing is inherited from the calling process.
+    /// what is set here; nothing is inherited from the calling process. (On
+    /// Windows the system adds `LOCALAPPDATA`, `TEMP` and `TMP`, pointing at
+    /// the AppContainer's own folder.)
     pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.env.insert(key.into(), value.into());
         self
