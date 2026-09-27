@@ -482,6 +482,7 @@ fn resolve_secret(raw: Option<&str>) -> Option<String> {
 mod tests {
     use super::StdioLaunch;
 
+    #[cfg(unix)]
     #[test]
     fn unix_socket_urls_need_an_absolute_path() {
         assert_eq!(

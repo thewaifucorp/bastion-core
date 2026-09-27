@@ -362,7 +362,9 @@ fn probe(helper: &Path) -> Result<Backend, String> {
     let sandbox = Sandbox::with_backend(Backend::AppContainer, helper);
     let output = sandbox
         .command(
-            &SandboxSpec::new(system_root.join(r"System32\cmd.exe")).args(["/d", "/c", "exit 0"]),
+            &SandboxSpec::new(system_root.join(r"System32\cmd.exe"))
+                .args(["/d", "/c", "exit 0"])
+                .env("SystemRoot", system_root.to_string_lossy()),
         )
         .map_err(|e| e.to_string())?
         .output()
@@ -901,6 +903,7 @@ mod tests {
         assert!(profile.contains("(allow network-outbound)"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn resolve_rejects_a_missing_path_and_exposes_the_program_directory() {
         let err = resolve(&SandboxSpec::new("/usr/bin/env").read_only("/definitely/not/here"))

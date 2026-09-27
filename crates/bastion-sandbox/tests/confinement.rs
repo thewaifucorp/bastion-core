@@ -295,6 +295,25 @@ fn the_host_loopback_is_unreachable_when_the_network_is_blocked() {
     );
 }
 
+/// A spec with no variables at all still runs: the child's environment is
+/// empty, not the helper's.
+#[test]
+fn an_empty_environment_is_allowed() {
+    let Some(backend) = backend() else {
+        return;
+    };
+    #[cfg(unix)]
+    let spec = SandboxSpec::new("/bin/sh").args(["-c", "exit 0"]);
+    #[cfg(windows)]
+    let spec = SandboxSpec::new(system32().join("cmd.exe")).args(["/d", "/c", "exit 0"]);
+    let out = backend.command(&spec).unwrap().output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 /// BMD-06: without a backend a host gets an error, never an unconfined
 /// sandbox. On Windows the probe runs the helper, so a helper that does not
 /// exist means no backend.

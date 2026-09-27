@@ -1226,7 +1226,16 @@ fn relative_to_root(shared: &Shared, path: &Path) -> PathBuf {
         .root
         .canonicalize()
         .unwrap_or_else(|_| shared.workspace.root.clone());
-    let candidate = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    // A proposed edit may name a file that does not exist yet: canonicalize
+    // its directory instead, or a root reached through another spelling (a
+    // symlink, a Windows 8.3 short name) would never match.
+    let candidate = path
+        .canonicalize()
+        .or_else(|e| match (path.parent(), path.file_name()) {
+            (Some(dir), Some(name)) => dir.canonicalize().map(|dir| dir.join(name)),
+            _ => Err(e),
+        })
+        .unwrap_or_else(|_| path.to_path_buf());
     candidate
         .strip_prefix(&root)
         .map(Path::to_path_buf)
