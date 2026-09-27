@@ -50,8 +50,8 @@ struct Fixture {
 fn fixture() -> Fixture {
     let root = tempfile::tempdir().expect("tempdir");
     let base = root.path().join("workspaces");
-    let state = root.path().join("home/.harness");
-    let secret = root.path().join("home/.ssh/id_ed25519");
+    let state = root.path().join("home").join(".harness");
+    let secret = root.path().join("home").join(".ssh").join("id_ed25519");
     std::fs::create_dir_all(&state).unwrap();
     std::fs::create_dir_all(secret.parent().unwrap()).unwrap();
     std::fs::write(&secret, "PRIVATE-KEY").unwrap();
