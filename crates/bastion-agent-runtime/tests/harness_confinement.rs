@@ -125,7 +125,7 @@ async fn confined_harness_sees_workspace_and_grants_only(sandbox: &Sandbox) {
              echo st>{state}\\state.txt && echo STATE_OK & \
              type {secret} && echo SECRET_READ & \
              echo env=%SESSION_VAR% daemon=%DAEMON_ONLY_SECRET% & \
-             echo tmp=%TMPDIR%& type nul>%TMPDIR%\\t && echo TMP_OK",
+             echo tmp=%TMPDIR%& echo t>%TMPDIR%\\t && echo TMP_OK",
             state = fx.state.display(),
             secret = fx.secret.display(),
         )
