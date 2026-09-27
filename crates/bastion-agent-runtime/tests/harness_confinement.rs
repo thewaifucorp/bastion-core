@@ -81,7 +81,7 @@ fn shell() -> (PathBuf, &'static str, BTreeMap<String, String>) {
     }
 }
 
-/// Runs `script` as the harness through `confinement` and returns stdout.
+/// Runs `script` as the harness through `confinement` and returns its output.
 async fn run(
     confinement: &HarnessConfinement,
     workspace: &WorkspacePolicy,
@@ -104,7 +104,13 @@ async fn run(
         confinement.command(launch).expect("confined command")
     };
     let out = command.output().await.expect("harness runs");
-    String::from_utf8_lossy(&out.stdout).into_owned()
+    // stderr too, so a failing assertion shows why (it never carries the
+    // markers the assertions look for).
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
 }
 
 async fn confined_harness_sees_workspace_and_grants_only(sandbox: &Sandbox) {

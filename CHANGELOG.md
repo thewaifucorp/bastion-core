@@ -10,8 +10,8 @@ version).
 ## 0.7.0 — 2026-09-26
 
 Repo tag `v0.7.0`. `bastion-sandbox` 0.1.0 → 0.2.0 (`Backend` gained a
-variant and is now `#[non_exhaustive]`) sets the minor; no other crate
-version changed.
+variant and is now `#[non_exhaustive]`) sets the minor; `bastion-mcp` 0.2.1 →
+0.2.2 and `bastion-agent-runtime` 0.3.0 → 0.3.1 are fixes.
 
 ### Added
 
@@ -62,6 +62,15 @@ version changed.
   `SandboxError::Unavailable` (tested), so `[sandbox] mode = "required"`
   keeps refusing to start there as on Linux and macOS (BMD-06).
 - `Backend` is `#[non_exhaustive]`: a `match` on it needs a wildcard arm.
+
+### Fixed
+
+- **`bastion-agent-runtime` 0.3.1:** a proposed edit to a file that does not
+  exist yet is reported relative to the session root even when the root is
+  reached through another spelling (a symlink, a Windows 8.3 short name);
+  before, such an edit kept its absolute path.
+- **`bastion-mcp` 0.2.2:** builds on Windows. A `unix:` MCP server URL is
+  refused there with an error instead of failing to compile.
 
 ## 0.6.1 — 2026-09-26
 
