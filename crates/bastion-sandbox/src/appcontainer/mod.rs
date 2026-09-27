@@ -165,22 +165,22 @@ pub(crate) fn environment_block(vars: &[(Vec<u16>, Vec<u16>)]) -> Result<Vec<u16
 /// who else may.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) mod rights {
-    pub const GENERIC_READ: u32 = 0x8000_0000;
-    pub const GENERIC_WRITE: u32 = 0x4000_0000;
-    pub const GENERIC_EXECUTE: u32 = 0x2000_0000;
-    pub const GENERIC_ALL: u32 = 0x1000_0000;
-    pub const FILE_GENERIC_READ: u32 = 0x0012_0089;
-    pub const FILE_GENERIC_WRITE: u32 = 0x0012_0116;
-    pub const FILE_GENERIC_EXECUTE: u32 = 0x0012_00a0;
-    pub const FILE_ALL_ACCESS: u32 = 0x001f_01ff;
-    pub const DELETE: u32 = 0x0001_0000;
-    pub const FILE_DELETE_CHILD: u32 = 0x0000_0040;
+    pub(crate) const GENERIC_READ: u32 = 0x8000_0000;
+    pub(crate) const GENERIC_WRITE: u32 = 0x4000_0000;
+    pub(crate) const GENERIC_EXECUTE: u32 = 0x2000_0000;
+    pub(crate) const GENERIC_ALL: u32 = 0x1000_0000;
+    pub(crate) const FILE_GENERIC_READ: u32 = 0x0012_0089;
+    pub(crate) const FILE_GENERIC_WRITE: u32 = 0x0012_0116;
+    pub(crate) const FILE_GENERIC_EXECUTE: u32 = 0x0012_00a0;
+    pub(crate) const FILE_ALL_ACCESS: u32 = 0x001f_01ff;
+    pub(crate) const DELETE: u32 = 0x0001_0000;
+    pub(crate) const FILE_DELETE_CHILD: u32 = 0x0000_0040;
 
-    pub const READ: u32 = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
-    pub const READ_WRITE: u32 = READ | FILE_GENERIC_WRITE | DELETE | FILE_DELETE_CHILD;
+    pub(crate) const READ: u32 = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
+    pub(crate) const READ_WRITE: u32 = READ | FILE_GENERIC_WRITE | DELETE | FILE_DELETE_CHILD;
 
     /// Generic bits of an ACE mask replaced by the file rights they stand for.
-    pub fn map_generic(mask: u32) -> u32 {
+    pub(crate) fn map_generic(mask: u32) -> u32 {
         let mut mapped = mask & !(GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE | GENERIC_ALL);
         if mask & GENERIC_READ != 0 {
             mapped |= FILE_GENERIC_READ;
