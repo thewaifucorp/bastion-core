@@ -8,6 +8,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bastion_memory::sqlite::SqliteMemory;
 use bastion_memory::Memory;
+use bastion_mesh::devices::fence::EpochFence;
 use bastion_mesh::devices::log::{EventLog, LoggedMemory};
 use bastion_mesh::devices::replica::MemoryEventKind;
 use bastion_mesh::devices::replica_store::ReplicaStore;
@@ -74,13 +75,14 @@ async fn setup(holds_replica: bool) -> Setup {
     registry.admit(e, &approval).unwrap();
 
     let (path, inner) = memory(dir.path(), "primary.db").await;
-    let log = Arc::new(EventLog::open(&path, DeviceId::new("linux-box"), 1).unwrap());
+    let fence = Arc::new(EpochFence::new(1));
+    let log = Arc::new(EventLog::open(&path, DeviceId::new("linux-box"), fence.clone()).unwrap());
     let primary_memory = LoggedMemory::new(Box::new(inner), log.clone());
     let hub = PrimaryHub::new(
         DeviceId::new("linux-box"),
         primary,
         Arc::new(RwLock::new(registry)),
-        1,
+        fence,
     );
     Setup {
         dir,
@@ -238,7 +240,12 @@ async fn the_replica_follows_the_primary_during_use_and_rebuilds_the_same_state(
 
     // Promotion: rebuild into a fresh memory.
     let (path, fresh) = memory(s.dir.path(), "promoted.db").await;
-    let new_log = EventLog::open(&path, DeviceId::new("pc-windows"), 2).unwrap();
+    let new_log = EventLog::open(
+        &path,
+        DeviceId::new("pc-windows"),
+        Arc::new(EpochFence::new(2)),
+    )
+    .unwrap();
     let rest = store.materialize(&fresh, &new_log).await.unwrap();
     assert_eq!(state(&fresh).await, state(&s.primary_memory).await);
     assert!(matches!(
@@ -316,7 +323,7 @@ async fn a_node_without_holds_replica_refuses_replica_batches() {
 async fn a_replica_batch_with_a_gap_is_refused_and_duplicates_are_skipped() {
     let dir = tempfile::tempdir().unwrap();
     let (path, _) = memory(dir.path(), "p.db").await;
-    let log = EventLog::open(&path, DeviceId::new("p"), 1).unwrap();
+    let log = EventLog::open(&path, DeviceId::new("p"), Arc::new(EpochFence::new(1))).unwrap();
     for key in ["a", "b", "c"] {
         log.record(MemoryEventKind::ConfigChanged { key: key.into() })
             .unwrap();

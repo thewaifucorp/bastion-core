@@ -60,6 +60,24 @@ version).
     secret **and** that device; `SealedSecretStore` keeps ciphertext only;
     `PrimaryToNode::Secrets` replaces the node's whole set (rotation, BMD-31);
     events never carry secret values (BMD-18).
+- **Promote a node and reconcile the old primary (`bastion-mesh` `devices`,
+  BMD-19..24).** Slice 6.
+  - `fence::EpochFence`, shared by a primary's hub and event log: once it
+    learns a newer epoch exists (a node that saw it, or the host), the log
+    refuses every write and the hub every order — never two primaries writing
+    in one epoch (BMD-21); `may_refresh()` is the guard for credential
+    refresh (only the current epoch's primary refreshes, BMD-32).
+  - `DeviceRegistry::promote` (current epoch + 1, every other primary becomes
+    a node, `EpochStart { epoch, primary, after_seq }` recorded) and
+    `merge` (the higher epoch wins; revocations are never undone). Nothing
+    promotes on its own (BMD-20). The registry replicates to every node
+    (`PrimaryToNode::Registry`), so any node can be promoted from its copy.
+  - `reconcile::reconcile` + `ConflictQueue`: a returning ex-primary hands
+    over what it wrote in its epoch after the fork (`RequestProposals` /
+    `Proposals`, `EventLog` implements `ProposalSource`); stores, sessions,
+    personas and config are unioned; a revoke/supersede of a belief this side
+    also changed becomes a queued conflict with both versions kept until the
+    owner resolves it (`KeepOurs` / `TakeTheirs`).
 - `bastion_runtime::capability::current_approval()`: the approval-queue id of
   the call being dispatched as the resolution of an owner's approval, so a
   forwarding capability can pass it on.

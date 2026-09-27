@@ -316,6 +316,15 @@ pub struct DeviceRecord {
     pub secret_grants: Vec<SecretGrant>,
 }
 
+/// When an epoch began: who became primary, and from which event of the
+/// previous epoch's log (its replica's last `seq` at promotion).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EpochStart {
+    pub epoch: u64,
+    pub primary: DeviceId,
+    pub after_seq: u64,
+}
+
 /// The owner's devices. Serializable: it is part of what replicates (§5.6).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceRegistry {
@@ -323,6 +332,8 @@ pub struct DeviceRegistry {
     #[serde(with = "key_b64")]
     owner_key: [u8; 32],
     devices: BTreeMap<DeviceId, DeviceRecord>,
+    #[serde(default)]
+    epochs: Vec<EpochStart>,
 }
 
 impl DeviceRegistry {
@@ -348,6 +359,11 @@ impl DeviceRegistry {
         Ok(Self {
             owner: primary.owner.clone(),
             owner_key,
+            epochs: vec![EpochStart {
+                epoch: 1,
+                primary: primary.device.clone(),
+                after_seq: 0,
+            }],
             devices,
         })
     }
@@ -483,6 +499,80 @@ impl DeviceRegistry {
     ) -> Result<(), EnrollmentError> {
         self.active_mut(device)?.address = address;
         Ok(())
+    }
+
+    /// The newest epoch this registry knows.
+    pub fn current_epoch(&self) -> u64 {
+        self.epochs.iter().map(|e| e.epoch).max().unwrap_or(0)
+    }
+
+    pub fn epochs(&self) -> &[EpochStart] {
+        &self.epochs
+    }
+
+    pub fn epoch_start(&self, epoch: u64) -> Option<&EpochStart> {
+        self.epochs.iter().find(|e| e.epoch == epoch)
+    }
+
+    /// Make `device` the primary of a new epoch (current + 1) whose log
+    /// continues after `after_seq`; every other primary becomes a node.
+    /// Returns the new epoch. Only ever called by a local action of the
+    /// owner on `device` (BMD-19, BMD-20).
+    pub fn promote(&mut self, device: &DeviceId, after_seq: u64) -> Result<u64, EnrollmentError> {
+        self.active(device)?;
+        let epoch = self.current_epoch() + 1;
+        for record in self.devices.values_mut() {
+            record.role = if record.enrollment.device == *device {
+                Role::Primary { epoch }
+            } else {
+                Role::Node {
+                    replica: record.enrollment.holds_replica,
+                }
+            };
+        }
+        self.epochs.push(EpochStart {
+            epoch,
+            primary: device.clone(),
+            after_seq,
+        });
+        Ok(epoch)
+    }
+
+    /// Take everything a newer copy of the registry knows (a node's snapshot
+    /// meeting the primary's): roles and epochs from whichever copy has the
+    /// newer epoch, enrollments by revision, revocations never undone.
+    pub fn merge(&mut self, other: &DeviceRegistry) {
+        if other.owner != self.owner || other.owner_key != self.owner_key {
+            return;
+        }
+        let other_newer = other.current_epoch() > self.current_epoch();
+        for (id, theirs) in &other.devices {
+            match self.devices.get_mut(id) {
+                None => {
+                    self.devices.insert(id.clone(), theirs.clone());
+                }
+                Some(ours) => {
+                    if theirs.enrollment.revision > ours.enrollment.revision
+                        && theirs.enrollment.verify(&self.owner_key).is_ok()
+                    {
+                        ours.enrollment = theirs.enrollment.clone();
+                    }
+                    ours.revoked |= theirs.revoked;
+                    if other_newer {
+                        ours.role = theirs.role;
+                        if theirs.address.is_some() {
+                            ours.address = theirs.address.clone();
+                        }
+                    }
+                }
+            }
+        }
+        for start in &other.epochs {
+            if self.epoch_start(start.epoch).is_none() {
+                self.epochs.push(start.clone());
+            }
+        }
+        self.epochs.sort_by_key(|e| e.epoch);
     }
 
     fn check_owner(&self, enrollment: &Enrollment) -> Result<(), EnrollmentError> {
@@ -677,5 +767,72 @@ pub(crate) mod tests {
         let back: DeviceRegistry = serde_json::from_str(&json).unwrap();
         assert_eq!(back, fx.registry);
         assert_eq!(back.primary().unwrap().1, 1);
+    }
+}
+
+#[cfg(test)]
+mod promotion_tests {
+    use super::tests::{enrollment, fixture};
+    use super::*;
+
+    #[test]
+    fn promotion_moves_the_primary_role_and_grows_the_epoch() {
+        let mut fx = fixture();
+        let e = enrollment(&fx.owner, "pc-windows", &fx.node);
+        let approval = EnrollmentApproval::sign(DeviceId::new("linux-box"), &fx.primary, &e);
+        fx.registry.admit(e, &approval).unwrap();
+        assert_eq!(fx.registry.current_epoch(), 1);
+
+        assert_eq!(
+            fx.registry
+                .promote(&DeviceId::new("pc-windows"), 42)
+                .unwrap(),
+            2
+        );
+        let (primary, epoch) = fx.registry.primary().unwrap();
+        assert_eq!(primary.enrollment.device, DeviceId::new("pc-windows"));
+        assert_eq!(epoch, 2);
+        assert!(matches!(
+            fx.registry.get(&DeviceId::new("linux-box")).unwrap().role,
+            Role::Node { .. }
+        ));
+        assert_eq!(fx.registry.epoch_start(2).unwrap().after_seq, 42);
+
+        // The owner can promote the old one back; the epoch grows again.
+        assert_eq!(
+            fx.registry
+                .promote(&DeviceId::new("linux-box"), 50)
+                .unwrap(),
+            3
+        );
+        assert_eq!(fx.registry.primary().unwrap().1, 3);
+    }
+
+    #[test]
+    fn a_revoked_device_cannot_be_promoted() {
+        let mut fx = fixture();
+        let e = enrollment(&fx.owner, "pc-windows", &fx.node);
+        let approval = EnrollmentApproval::sign(DeviceId::new("linux-box"), &fx.primary, &e);
+        fx.registry.admit(e, &approval).unwrap();
+        fx.registry.revoke(&DeviceId::new("pc-windows")).unwrap();
+        assert!(fx
+            .registry
+            .promote(&DeviceId::new("pc-windows"), 0)
+            .is_err());
+    }
+
+    #[test]
+    fn merging_takes_the_newer_epoch_and_never_undoes_a_revocation() {
+        let mut fx = fixture();
+        let e = enrollment(&fx.owner, "pc-windows", &fx.node);
+        let approval = EnrollmentApproval::sign(DeviceId::new("linux-box"), &fx.primary, &e);
+        fx.registry.admit(e, &approval).unwrap();
+        let mut promoted = fx.registry.clone();
+        promoted.promote(&DeviceId::new("pc-windows"), 9).unwrap();
+        let mut stale = fx.registry.clone();
+        stale.revoke(&DeviceId::new("pc-windows")).unwrap();
+        stale.merge(&promoted);
+        assert_eq!(stale.current_epoch(), 2);
+        assert!(stale.get(&DeviceId::new("pc-windows")).unwrap().revoked);
     }
 }

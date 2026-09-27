@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::enrollment::{sig_b64, DeviceId, Enrollment};
+use super::enrollment::{sig_b64, DeviceId, DeviceRegistry, Enrollment};
 use super::replica::MemoryEvent;
 use super::secrets::SealedSecret;
 
@@ -114,6 +114,12 @@ pub enum NodeToPrimary {
     ReplicaAck {
         seq: u64,
     },
+    /// What this device wrote as primary of `epoch` after `after_seq` —
+    /// sent by a returning ex-primary when asked (§5.5).
+    Proposals {
+        epoch: u64,
+        events: Vec<MemoryEvent>,
+    },
     /// An order the node refused before running it (stale epoch, …) — also
     /// answered as an `InvokeResult`; this is the audit line.
     Rejected {
@@ -163,6 +169,17 @@ pub enum PrimaryToNode {
     Secrets {
         secrets: Vec<SealedSecret>,
         epoch: u64,
+    },
+    /// The owner's device registry (§5.6), replicated to every node so any
+    /// of them can be promoted and clients can find the primary.
+    Registry {
+        registry: Box<DeviceRegistry>,
+    },
+    /// Ask a returning ex-primary for what it wrote in `epoch` after
+    /// `after_seq` (the point this primary was promoted from).
+    RequestProposals {
+        epoch: u64,
+        after_seq: u64,
     },
     /// The receiver stops being primary.
     Demote {

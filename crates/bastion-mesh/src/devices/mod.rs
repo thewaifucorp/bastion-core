@@ -12,13 +12,18 @@
 //! - [`replica_store`] — a node's encrypted replica.
 //! - [`replicate`] — pushes the log to replica nodes, live and on reconnect.
 //! - [`secrets`] — secrets sealed to a node, dormant until promotion.
+//! - [`fence`] — the epoch a primary writes in, closed once superseded.
+//! - [`reconcile`] — merging a returning ex-primary's writes; the conflict
+//!   queue.
 
 pub mod enrollment;
+pub mod fence;
 pub(crate) mod handshake;
 pub mod hub;
 pub mod log;
 pub mod node;
 pub mod protocol;
+pub mod reconcile;
 pub mod replica;
 pub mod replica_store;
 pub mod replicate;
@@ -27,12 +32,12 @@ pub mod transport;
 
 pub use enrollment::{
     CapabilityGrant, DeviceId, DeviceRecord, DeviceRegistry, Enrollment, EnrollmentApproval,
-    EnrollmentError, GrantScope, Platform, Role, SecretGrant,
+    EnrollmentError, EpochStart, GrantScope, Platform, Role, SecretGrant,
 };
 pub use hub::{remote_name, HubEvent, PrimaryHub, RemoteCapability};
 pub use node::{
-    NodeAgent, NodeCapability, NodeConfig, NodeHandle, NodeState, ReplicaSink, RevocationHook,
-    SecretSink, SessionEnd,
+    NodeAgent, NodeCapability, NodeConfig, NodeHandle, NodeState, ProposalSource, ReplicaSink,
+    RevocationHook, SecretSink, SessionEnd,
 };
 pub use protocol::{
     ApprovalRef, CallId, CapabilityDescriptor, Evidence, InvokeError, NodeToPrimary, PrimaryToNode,

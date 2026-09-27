@@ -99,7 +99,7 @@ async fn world(grants: Vec<CapabilityGrant>, epoch: u64) -> World {
         DeviceId::new("linux-box"),
         primary,
         Arc::new(RwLock::new(registry)),
-        epoch,
+        Arc::new(bastion_mesh::devices::fence::EpochFence::new(epoch)),
     );
     World {
         owner,
@@ -350,7 +350,7 @@ async fn a_primary_from_an_older_epoch_is_refused_by_the_node() {
     let mut w = world(vec![grant("echo", false)], 1).await;
     let node = Arc::new(w.node_with_state(NodeState {
         epoch_seen: 2,
-        enrollment: None,
+        ..NodeState::default()
     }));
     let mut events = w.hub.subscribe();
     let (primary_side, node_side) = memory_pair();

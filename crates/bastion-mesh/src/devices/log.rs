@@ -7,7 +7,6 @@
 //! to replica nodes (BMD-16). Weight tweaks, outcome counters and pending
 //! corrections are local learning signals and are not replicated.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
@@ -15,6 +14,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use tokio::sync::broadcast;
 
 use super::enrollment::DeviceId;
+use super::fence::EpochFence;
 use super::replica::{BeliefPayload, GlobalId, MemoryEvent, MemoryEventKind, Procedural};
 use crate::memory::{Belief, BeliefDraft, Memory, Outcome, PendingCorrection, PrivacyTier};
 
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS device_global_ids (
 pub struct EventLog {
     conn: Mutex<Connection>,
     origin: DeviceId,
-    epoch: AtomicU64,
+    fence: std::sync::Arc<EpochFence>,
     /// Last hybrid-logical-clock value handed out.
     clock: Mutex<i64>,
     tx: broadcast::Sender<MemoryEvent>,
@@ -54,8 +54,13 @@ fn now_nanos() -> i64 {
 
 impl EventLog {
     /// Open (creating the tables) the log in `db_path` for events written
-    /// by `origin` during `epoch`.
-    pub fn open(db_path: &str, origin: DeviceId, epoch: u64) -> anyhow::Result<Self> {
+    /// by `origin` in the epoch `fence` holds. Writes stop when the fence
+    /// closes.
+    pub fn open(
+        db_path: &str,
+        origin: DeviceId,
+        fence: std::sync::Arc<EpochFence>,
+    ) -> anyhow::Result<Self> {
         let conn = Connection::open(db_path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")?;
         conn.execute_batch(SCHEMA)?;
@@ -67,7 +72,7 @@ impl EventLog {
         Ok(Self {
             conn: Mutex::new(conn),
             origin,
-            epoch: AtomicU64::new(epoch),
+            fence,
             clock: Mutex::new(last_at.unwrap_or(0)),
             tx,
         })
@@ -82,12 +87,11 @@ impl EventLog {
     }
 
     pub fn epoch(&self) -> u64 {
-        self.epoch.load(Ordering::SeqCst)
+        self.fence.epoch()
     }
 
-    /// The epoch new events are stamped with (after a promotion).
-    pub fn set_epoch(&self, epoch: u64) {
-        self.epoch.store(epoch, Ordering::SeqCst);
+    pub fn fence(&self) -> &std::sync::Arc<EpochFence> {
+        &self.fence
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<MemoryEvent> {
@@ -100,8 +104,19 @@ impl EventLog {
         *clock
     }
 
-    /// Append an event written here, now.
+    /// Append an event written here, now. Refused once superseded.
     pub fn record(&self, kind: MemoryEventKind) -> anyhow::Result<MemoryEvent> {
+        self.record_from(self.origin.clone(), kind)
+    }
+
+    /// Append an event whose origin is another device (a proposal accepted
+    /// during reconciliation keeps who wrote it).
+    pub fn record_from(
+        &self,
+        origin: DeviceId,
+        kind: MemoryEventKind,
+    ) -> anyhow::Result<MemoryEvent> {
+        self.fence.check()?;
         let at = self.tick();
         let event = {
             let conn = self.conn();
@@ -113,7 +128,7 @@ impl EventLog {
             let event = MemoryEvent {
                 seq,
                 epoch: self.epoch(),
-                origin: self.origin.clone(),
+                origin,
                 at,
                 kind,
             };
@@ -202,6 +217,11 @@ impl EventLog {
             params![id.origin.as_str(), id.local, local, owner],
         )?;
         Ok(())
+    }
+
+    /// Whether a belief with this global id exists here.
+    pub fn is_known(&self, id: &GlobalId) -> anyhow::Result<bool> {
+        Ok(self.mapped(id)?.is_some())
     }
 
     /// Local id and owner of a mapped global id.
@@ -526,4 +546,16 @@ pub async fn apply_to_memory(
         }
     }
     Ok(rest)
+}
+
+/// An ex-primary hands the new primary what it wrote in its epoch.
+#[async_trait]
+impl super::node::ProposalSource for EventLog {
+    async fn written_in(&self, epoch: u64, after_seq: u64) -> anyhow::Result<Vec<MemoryEvent>> {
+        Ok(self
+            .since(Some(after_seq))?
+            .into_iter()
+            .filter(|e| e.epoch == epoch)
+            .collect())
+    }
 }

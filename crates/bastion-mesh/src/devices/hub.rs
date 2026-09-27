@@ -19,6 +19,7 @@ use tokio::sync::{broadcast, mpsc, oneshot, Mutex, RwLock};
 type Pending = Arc<std::sync::Mutex<HashMap<CallId, oneshot::Sender<Reply>>>>;
 
 use super::enrollment::{CapabilityGrant, DeviceId, DeviceRegistry, Role};
+use super::fence::EpochFence;
 use super::handshake;
 use super::protocol::{
     ApprovalRef, CallId, CapabilityDescriptor, Evidence, InvokeError, NodeToPrimary, PrimaryToNode,
@@ -61,6 +62,12 @@ pub enum HubEvent {
         device: DeviceId,
         seq: u64,
     },
+    /// A returning ex-primary's writes from its epoch, for reconciliation.
+    Proposals {
+        device: DeviceId,
+        epoch: u64,
+        events: Vec<MemoryEvent>,
+    },
     /// A node's first message says it has seen a newer epoch than ours: this
     /// primary is stale and must stop accepting writes (BMD-21).
     NewerEpochSeen {
@@ -82,7 +89,7 @@ struct Inner {
     device: DeviceId,
     identity: AgeIdentity,
     registry: Arc<RwLock<DeviceRegistry>>,
-    epoch: AtomicU64,
+    fence: Arc<EpochFence>,
     sessions: Mutex<HashMap<DeviceId, Session>>,
     descriptors: Mutex<HashMap<DeviceId, Vec<CapabilityDescriptor>>>,
     next_call: AtomicU64,
@@ -103,7 +110,7 @@ impl PrimaryHub {
         device: DeviceId,
         identity: AgeIdentity,
         registry: Arc<RwLock<DeviceRegistry>>,
-        epoch: u64,
+        fence: Arc<EpochFence>,
     ) -> Self {
         let (events, _) = broadcast::channel(256);
         Self {
@@ -111,7 +118,7 @@ impl PrimaryHub {
                 device,
                 identity,
                 registry,
-                epoch: AtomicU64::new(epoch),
+                fence,
                 sessions: Mutex::new(HashMap::new()),
                 descriptors: Mutex::new(HashMap::new()),
                 next_call: AtomicU64::new(1),
@@ -122,7 +129,11 @@ impl PrimaryHub {
     }
 
     pub fn epoch(&self) -> u64 {
-        self.inner.epoch.load(Ordering::SeqCst)
+        self.inner.fence.epoch()
+    }
+
+    pub fn fence(&self) -> &Arc<EpochFence> {
+        &self.inner.fence
     }
 
     pub fn device(&self) -> &DeviceId {
@@ -182,6 +193,7 @@ impl PrimaryHub {
             fail_pending(&old.pending, &device, self);
         }
         tracing::info!(event = "hub_node_connected", device = %device);
+        self.push_registry_to(&device).await;
         self.emit(HubEvent::Connected {
             device: device.clone(),
         });
@@ -254,7 +266,9 @@ impl PrimaryHub {
         };
         let epoch = self.epoch();
         if epoch_seen > epoch {
-            // Someone was promoted after us: we are the stale one.
+            // Someone was promoted after us: we are the stale one. Stop
+            // writing at once (BMD-21).
+            self.inner.fence.observe(epoch_seen);
             self.emit(HubEvent::NewerEpochSeen {
                 device: device.clone(),
                 epoch: epoch_seen,
@@ -353,6 +367,13 @@ impl PrimaryHub {
                     reason,
                 });
             }
+            NodeToPrimary::Proposals { epoch, events } => {
+                self.emit(HubEvent::Proposals {
+                    device: device.clone(),
+                    epoch,
+                    events,
+                });
+            }
             NodeToPrimary::Hello { .. } | NodeToPrimary::Proof { .. } => {
                 tracing::warn!(event = "hub_unexpected_handshake_frame", device = %device);
             }
@@ -370,6 +391,12 @@ impl PrimaryHub {
         args: Value,
         approval: Option<ApprovalRef>,
     ) -> Result<(Value, Vec<Evidence>), InvokeError> {
+        if self.inner.fence.check().is_err() {
+            return Err(InvokeError::StaleEpoch {
+                seen: self.inner.fence.epoch() + 1,
+                got: self.inner.fence.epoch(),
+            });
+        }
         let grant = self.grant(device, capability).await?;
         if grant.needs_approval && approval.is_none() {
             return Err(InvokeError::NeedsApproval);
@@ -449,6 +476,36 @@ impl PrimaryHub {
                 secrets,
                 epoch: self.epoch(),
             });
+        }
+    }
+
+    /// Send the current registry to every connected node (after enrolling,
+    /// revoking, promoting, changing an address).
+    pub async fn push_registry(&self) {
+        let registry = self.inner.registry.read().await.clone();
+        for session in self.inner.sessions.lock().await.values() {
+            let _ = session.tx.send(PrimaryToNode::Registry {
+                registry: Box::new(registry.clone()),
+            });
+        }
+    }
+
+    async fn push_registry_to(&self, device: &DeviceId) {
+        let registry = self.inner.registry.read().await.clone();
+        if let Some(session) = self.inner.sessions.lock().await.get(device) {
+            let _ = session.tx.send(PrimaryToNode::Registry {
+                registry: Box::new(registry),
+            });
+        }
+    }
+
+    /// Ask `device` (an ex-primary of `epoch`) for what it wrote after
+    /// `after_seq`; the answer arrives as [`HubEvent::Proposals`].
+    pub async fn request_proposals(&self, device: &DeviceId, epoch: u64, after_seq: u64) {
+        if let Some(session) = self.inner.sessions.lock().await.get(device) {
+            let _ = session
+                .tx
+                .send(PrimaryToNode::RequestProposals { epoch, after_seq });
         }
     }
 

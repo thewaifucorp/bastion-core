@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 
-use super::enrollment::{CapabilityGrant, DeviceId, Enrollment};
+use super::enrollment::{CapabilityGrant, DeviceId, DeviceRegistry, Enrollment};
 use super::handshake;
 use super::protocol::{
     ApprovalRef, CallId, CapabilityDescriptor, Evidence, InvokeError, NodeToPrimary, PrimaryToNode,
@@ -65,6 +65,13 @@ pub trait SecretSink: Send + Sync {
     async fn replace(&self, secrets: Vec<SealedSecret>) -> anyhow::Result<()>;
 }
 
+/// A returning ex-primary's own log: what it wrote while it was primary,
+/// handed to the new primary for reconciliation.
+#[async_trait]
+pub trait ProposalSource: Send + Sync {
+    async fn written_in(&self, epoch: u64, after_seq: u64) -> anyhow::Result<Vec<MemoryEvent>>;
+}
+
 /// Called when the primary revokes this device: delete the secrets key
 /// (BMD-33) and anything else only an enrolled device should keep.
 #[async_trait]
@@ -79,6 +86,9 @@ pub struct NodeState {
     pub epoch_seen: u64,
     /// The newest owner-signed enrollment of this device.
     pub enrollment: Option<Enrollment>,
+    /// The owner's registry as last received from a primary.
+    #[serde(default)]
+    pub registry: Option<DeviceRegistry>,
 }
 
 /// A node's fixed identity and trust anchor.
@@ -131,6 +141,7 @@ pub struct NodeAgent {
     capabilities: HashMap<String, Arc<dyn NodeCapability>>,
     replica: Option<Arc<dyn ReplicaSink>>,
     secrets: Option<Arc<dyn SecretSink>>,
+    proposals: Option<Arc<dyn ProposalSource>>,
     revocation: Option<Arc<dyn RevocationHook>>,
     /// Results of calls that finished after their connection dropped,
     /// reported on the next connection (§7: "reporta ao reconectar").
@@ -156,6 +167,7 @@ impl NodeAgent {
             capabilities: HashMap::new(),
             replica: None,
             secrets: None,
+            proposals: None,
             revocation: None,
             outbox: Mutex::new(Vec::new()),
             stop: CancellationToken::new(),
@@ -175,6 +187,11 @@ impl NodeAgent {
 
     pub fn with_secrets(mut self, sink: Arc<dyn SecretSink>) -> Self {
         self.secrets = Some(sink);
+        self
+    }
+
+    pub fn with_proposals(mut self, source: Arc<dyn ProposalSource>) -> Self {
+        self.proposals = Some(source);
         self
     }
 
@@ -545,6 +562,27 @@ impl NodeAgent {
                     (None, Some(sink)) => sink.replace(secrets).await?,
                     (None, None) => {}
                 }
+            }
+            PrimaryToNode::Registry { registry } => {
+                // Only the owner's registry.
+                if registry.owner() != self.config.owner
+                    || *registry.owner_key() != self.config.owner_key
+                {
+                    tracing::warn!(event = "node_registry_refused");
+                    return Ok(None);
+                }
+                let mut state = self.state.lock().await;
+                state.registry = Some(*registry);
+                let snapshot = state.clone();
+                drop(state);
+                self.save(&snapshot).await;
+            }
+            PrimaryToNode::RequestProposals { epoch, after_seq } => {
+                let events = match &self.proposals {
+                    Some(source) => source.written_in(epoch, after_seq).await?,
+                    None => Vec::new(),
+                };
+                send(conn, &NodeToPrimary::Proposals { epoch, events }).await?;
             }
             PrimaryToNode::Demote { new_epoch } => {
                 let mut state = self.state.lock().await;
