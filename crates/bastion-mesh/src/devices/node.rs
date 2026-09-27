@@ -30,6 +30,7 @@ use super::protocol::{
     ApprovalRef, CallId, CapabilityDescriptor, Evidence, InvokeError, NodeToPrimary, PrimaryToNode,
 };
 use super::replica::MemoryEvent;
+use super::secrets::SealedSecret;
 use super::transport::FrameConn;
 use crate::identity::age_identity::AgeIdentity;
 
@@ -55,6 +56,13 @@ pub trait ReplicaSink: Send + Sync {
     /// The last applied `seq`, to resume from after a reconnect.
     async fn last_seq(&self) -> Option<u64>;
     async fn apply(&self, from_seq: u64, events: Vec<MemoryEvent>) -> anyhow::Result<u64>;
+}
+
+/// Where a node keeps the sealed secrets the primary sends (ciphertext
+/// only; see `secrets`).
+#[async_trait]
+pub trait SecretSink: Send + Sync {
+    async fn replace(&self, secrets: Vec<SealedSecret>) -> anyhow::Result<()>;
 }
 
 /// Called when the primary revokes this device: delete the secrets key
@@ -122,6 +130,7 @@ pub struct NodeAgent {
     state: Mutex<NodeState>,
     capabilities: HashMap<String, Arc<dyn NodeCapability>>,
     replica: Option<Arc<dyn ReplicaSink>>,
+    secrets: Option<Arc<dyn SecretSink>>,
     revocation: Option<Arc<dyn RevocationHook>>,
     /// Results of calls that finished after their connection dropped,
     /// reported on the next connection (§7: "reporta ao reconectar").
@@ -146,6 +155,7 @@ impl NodeAgent {
             state: Mutex::new(state),
             capabilities: HashMap::new(),
             replica: None,
+            secrets: None,
             revocation: None,
             outbox: Mutex::new(Vec::new()),
             stop: CancellationToken::new(),
@@ -160,6 +170,11 @@ impl NodeAgent {
 
     pub fn with_replica(mut self, sink: Arc<dyn ReplicaSink>) -> Self {
         self.replica = Some(sink);
+        self
+    }
+
+    pub fn with_secrets(mut self, sink: Arc<dyn SecretSink>) -> Self {
+        self.secrets = Some(sink);
         self
     }
 
@@ -511,6 +526,24 @@ impl NodeAgent {
                         )
                         .await?;
                     }
+                }
+            }
+            PrimaryToNode::Secrets { secrets, epoch } => {
+                let seen = self.state.lock().await.epoch_seen;
+                let own = secrets.iter().all(|s| s.device == self.config.device);
+                let refusal = if epoch < seen {
+                    Some(format!("secrets from epoch {epoch}, seen {seen}"))
+                } else if !own {
+                    Some("secrets sealed for another device".to_string())
+                } else if self.secrets.is_none() {
+                    Some("this device keeps no secrets".to_string())
+                } else {
+                    None
+                };
+                match (refusal, &self.secrets) {
+                    (Some(reason), _) => send(conn, &NodeToPrimary::Rejected { reason }).await?,
+                    (None, Some(sink)) => sink.replace(secrets).await?,
+                    (None, None) => {}
                 }
             }
             PrimaryToNode::Demote { new_epoch } => {

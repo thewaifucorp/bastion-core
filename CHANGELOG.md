@@ -39,6 +39,27 @@ version).
     connection drops is `Unknown`, never success; dropping a call cancels it
     on the node. Registered once per grant (the tool list is part of the
     cached prompt prefix); offline → `Unavailable`.
+- **Replicate the memory to an authorized node (`bastion-mesh` `devices`,
+  BMD-16..18).** Slice 5.
+  - `log::EventLog`: the primary's event log (SQLite, gapless `seq`, epoch,
+    origin, hybrid logical clock) and the `GlobalId` ↔ local-id map;
+    `log::LoggedMemory` wraps the primary's `Memory` so every belief stored,
+    revoked or superseded becomes an event. Sessions, personas and config are
+    recorded by the host with `EventLog::record` (`PersonaChanged` and
+    `SessionAppended` gained an optional payload so a promoted replica has the
+    content, not only its digest).
+  - `replica_store::ReplicaStore`: the node's replica, an append-only file of
+    ChaCha20-Poly1305 records under a host-supplied key (the host keeps it in
+    the system vault); a wrong key or a tampered file does not open; batches
+    apply in order (duplicates skipped, gaps refused); `materialize` rebuilds
+    a `Memory` and continues the log at promotion.
+  - `replicate::spawn`: every new event to every connected replica node, and a
+    catch-up from the last acknowledged `seq` when a node connects.
+  - `secrets`: a granted secret is sealed (age) to the node's own secrets key
+    (`Enrollment::secrets_recipient`), only with a `SecretGrant` naming that
+    secret **and** that device; `SealedSecretStore` keeps ciphertext only;
+    `PrimaryToNode::Secrets` replaces the node's whole set (rotation, BMD-31);
+    events never carry secret values (BMD-18).
 - `bastion_runtime::capability::current_approval()`: the approval-queue id of
   the call being dispatched as the resolution of an owner's approval, so a
   forwarding capability can pass it on.

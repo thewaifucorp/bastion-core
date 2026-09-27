@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use super::enrollment::{sig_b64, DeviceId, Enrollment};
 use super::replica::MemoryEvent;
+use super::secrets::SealedSecret;
 
 /// Identifies one invocation on one connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -156,6 +157,12 @@ pub enum PrimaryToNode {
     /// A newer enrollment for this node (grants changed).
     Grants {
         enrollment: Box<Enrollment>,
+    },
+    /// The complete set of secrets this node may keep, sealed to its secrets
+    /// key (§5.7). Replaces whatever it held.
+    Secrets {
+        secrets: Vec<SealedSecret>,
+        epoch: u64,
     },
     /// The receiver stops being primary.
     Demote {

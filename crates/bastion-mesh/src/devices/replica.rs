@@ -2,7 +2,12 @@
 //! so a node with `holds_replica` can rebuild the same state.
 //!
 //! Events are produced by [`super::log::LoggedMemory`] around the primary's
-//! `Memory` and applied on the node by [`super::log::ReplicaApplier`].
+//! `Memory` (beliefs) and by the host through [`super::log::EventLog::record`]
+//! (sessions, personas, config), stored on a node by
+//! [`super::replica_store::ReplicaStore`], and turned back into a `Memory`
+//! at promotion. Secrets never appear in an event (BMD-18): config events
+//! name a key, not its value, and secrets travel apart
+//! ([`super::secrets`]).
 
 use serde::{Deserialize, Serialize};
 
@@ -55,10 +60,18 @@ pub enum MemoryEventKind {
     PersonaChanged {
         name: String,
         contract_digest: String,
+        /// The persona's contract text (`SOUL.md`), so a promoted replica
+        /// has the persona and not only its digest. `None` when the host
+        /// replicates personas another way.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        contract: Option<String>,
     },
     SessionAppended {
         session: String,
         message_digest: String,
+        /// The message itself (serialized `Message`), for the same reason.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<serde_json::Value>,
     },
     ConfigChanged {
         key: String,

@@ -437,6 +437,21 @@ impl PrimaryHub {
         }
     }
 
+    /// Send `device` the complete set of secrets it may keep (after a grant,
+    /// a revoked grant, or a rotation on this primary, BMD-31).
+    pub async fn send_secrets(
+        &self,
+        device: &DeviceId,
+        secrets: Vec<super::secrets::SealedSecret>,
+    ) {
+        if let Some(session) = self.inner.sessions.lock().await.get(device) {
+            let _ = session.tx.send(PrimaryToNode::Secrets {
+                secrets,
+                epoch: self.epoch(),
+            });
+        }
+    }
+
     /// Tell a revoked device, if connected, and drop it.
     pub async fn notify_revoked(&self, device: &DeviceId) {
         if let Some(session) = self.inner.sessions.lock().await.remove(device) {

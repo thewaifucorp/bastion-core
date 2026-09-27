@@ -160,10 +160,12 @@ pub struct Enrollment {
     /// Ed25519 public key (the device's `bastion-mesh` identity).
     #[serde(with = "key_b64")]
     pub device_key: [u8; 32],
-    /// The device's age X25519 recipient (bech32), for what is encrypted to
-    /// it (the replica). Optional: a node without a replica needs none.
+    /// The device's secrets key (age X25519 recipient, bech32): secrets the
+    /// owner lets this device keep are encrypted to it (§5.7). Its private
+    /// half stays wrapped on the device and is unwrapped only at promotion,
+    /// with the owner present. `None`: the device keeps no secrets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub device_age: Option<String>,
+    pub secrets_recipient: Option<String>,
     pub platform: Platform,
     pub holds_replica: bool,
     /// Empty at first (BMD-03).
@@ -218,7 +220,7 @@ impl Enrollment {
             owner: owner.into(),
             device,
             device_key,
-            device_age: None,
+            secrets_recipient: None,
             platform,
             holds_replica,
             granted: Vec::new(),

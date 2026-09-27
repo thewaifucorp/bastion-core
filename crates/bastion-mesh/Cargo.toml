@@ -39,8 +39,13 @@ rustls            = { version = "0.23", default-features = false, features = ["s
 thiserror         = "2"
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 tokio-util        = "0.7"
+# Replica (src/devices): the event log and the encrypted replica file.
+chacha20poly1305  = "0.10"
+rusqlite          = { version = "0.39", features = ["bundled"] }
+zeroize           = "1"
 
 [dev-dependencies]
+bastion-memory = { path = "../bastion-memory" }
 tempfile    = "3"
 rcgen       = "0.13"
 tokio-rustls = "0.26"
