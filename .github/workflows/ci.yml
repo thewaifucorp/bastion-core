@@ -25,6 +25,24 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test
 
+  # BMD-07: the workspace builds, lints and passes its tests for
+  # x86_64-pc-windows-msvc. BMD-05: the confinement suites run under the
+  # AppContainer backend and may not skip (the runner is elevated, so the
+  # loopback case is checked in both directions).
+  windows:
+    needs: crate-deps
+    runs-on: windows-latest
+    env:
+      BASTION_SANDBOX_TESTS_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace
+
   # Examples must stay buildable against the substrate crates
   # alone (they never depend on the root `bastion` package) — a cheap check
   # that the public API remains sufficient for an external consumer.

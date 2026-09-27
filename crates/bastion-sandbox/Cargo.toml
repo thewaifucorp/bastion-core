@@ -1,17 +1,20 @@
 [package]
 name    = "bastion-sandbox"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
-description = "OS-level confinement for programs Bastion runs: bubblewrap on Linux, Seatbelt on macOS."
+description = "OS-level confinement for programs Bastion runs: bubblewrap or Landlock on Linux, Seatbelt on macOS, AppContainer on Windows."
 
 # Zero bastion-* dependencies, same stance as bastion-extension-wasm: this
 # crate knows nothing about capabilities, manifests or runtimes. It turns a
 # declarative SandboxSpec (program, env, cwd, which paths are visible, network
 # yes/no) into a std::process::Command that runs the program confined. Callers
 # convert with tokio::process::Command::from when they need async.
+# `deny`, not `forbid`: the Windows backend has to call Win32, and that code
+# lives in one module (src/appcontainer/win32.rs) that allows it with a
+# SAFETY comment on every block. Every other module stays unsafe-free.
 [lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 
 [lints.clippy]
 all = "warn"
@@ -28,6 +31,20 @@ thiserror = "2"
 landlock    = "0.4"
 seccompiler = "0.5"
 libc        = "0.2"
+
+# Windows backend: AppContainer (lowbox token), ACL grants, Job Object.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_WindowsFirewall",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Isolation",
+    "Win32_System_Console",
+    "Win32_System_JobObjects",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 tempfile  = "3"

@@ -214,7 +214,7 @@ async fn a_claude_bridge_session_is_isolated_and_asks() {
     let log = dir.path().join("log.json");
     // The adapter recognizes the agent family from the command line.
     let script = dir.path().join("claude-agent-acp-fake.py");
-    std::os::unix::fs::symlink(fixture(), &script).unwrap();
+    std::fs::copy(fixture(), &script).unwrap();
 
     let bridge = McpBridgeSpec {
         servers: vec![McpServerEndpoint::Http {

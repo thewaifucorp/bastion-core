@@ -726,13 +726,14 @@ dependencies = [
 
 [[package]]
 name = "bastion-sandbox"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "landlock",
  "libc",
  "seccompiler",
  "tempfile",
  "thiserror 2.0.18",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

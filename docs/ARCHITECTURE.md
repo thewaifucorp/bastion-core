@@ -48,7 +48,7 @@ The dependency allowlist in `scripts/check-crate-deps.sh` is authoritative. It p
 - `bastion-mesh` supplies identity, peer transport, `.af` interop, context, and scheduling.
 - `bastion-extension-protocol` defines manifests, permissions, trust tiers, signatures, and lockfiles.
 - `bastion-extension-wasm` provides the isolated WASM execution mechanism and does not know product manifests or capabilities.
-- `bastion-sandbox` confines host programs Bastion runs (tool CLIs, stdio MCP servers, subprocess extensions, agent harnesses) at the OS level: bubblewrap or Landlock + seccomp on Linux, Seatbelt on macOS. Deny by default; it knows only paths, environment and network, never capabilities.
+- `bastion-sandbox` confines host programs Bastion runs (tool CLIs, stdio MCP servers, subprocess extensions, agent harnesses) at the OS level: bubblewrap or Landlock + seccomp on Linux, Seatbelt on macOS, an AppContainer inside a Job Object on Windows. Deny by default; it knows only paths, environment and network, never capabilities.
 
 ## A turn through the kernel
 

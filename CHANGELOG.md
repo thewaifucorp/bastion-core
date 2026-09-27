@@ -7,6 +7,57 @@ version).
 
 ## Unreleased
 
+## 0.7.0 — 2026-09-26
+
+Repo tag `v0.7.0`. `bastion-sandbox` 0.1.0 → 0.2.0 (`Backend` gained a
+variant and is now `#[non_exhaustive]`) sets the minor; no other crate
+version changed.
+
+### Added
+
+- **Windows backend for `bastion-sandbox` (BMD-05).** `Sandbox::detect` on
+  Windows 10+ returns `Backend::AppContainer`: the helper starts the program
+  in an AppContainer (lowbox token — Low integrity, privileges stripped,
+  every access checked a second time against the container) inside a Job
+  Object, waits for it and exits with its status. Same public API and helper
+  protocol (`--backend appcontainer`) as the other backends.
+  - **Filesystem:** the container reaches what Windows grants every
+    AppContainer (reading `C:\Windows`, `C:\Program Files`) and the spec's
+    paths, each granted by an allow ACE for the container SID (read/execute,
+    or read/write/delete without `WRITE_DAC`). The operator's profile and any
+    other path fail the container half of the access check.
+  - **One container per grant set:** its name hashes the grants and the
+    network mode, so the ACEs left on a path serve only later launches with
+    the same grants; a path already readable by every AppContainer, or a
+    read-only path whose ACL the operator cannot change, is not rewritten.
+  - **Network:** blocked = no capabilities, every socket dropped by the
+    Windows Filtering Platform, loopback included. Allowed = `internetClient`,
+    `internetClientServer`, `privateNetworkClientServer`, plus a loopback
+    exemption so the host's `127.0.0.1` is reachable — that exemption is a
+    machine setting and needs an elevated helper; unelevated, the child has
+    the network but not the host's loopback.
+  - **Job Object:** the tree dies with the helper (killed included) and has
+    no access to other processes' windows, the clipboard, global atoms or
+    system settings.
+  - **Environment:** exactly the spec's variables, as the child's environment
+    block. Windows programs usually need `SystemRoot`; the spec must name it.
+  - The Win32 calls live in one module (`src/appcontainer/win32.rs`) with a
+    `SAFETY` note on each block; the crate lint went from `forbid` to `deny`
+    so that module alone can allow `unsafe_code`.
+- **Windows CI job (BMD-07).** `windows-latest` runs clippy
+  (`-D warnings`) and the whole workspace's tests with
+  `BASTION_SANDBOX_TESTS_REQUIRED=1`, so the confinement suites cannot skip.
+
+### Changed
+
+- `tests/confinement.rs` and `bastion-agent-runtime`'s
+  `harness_confinement` run the same cases on every OS (`/bin/sh` on Unix,
+  `cmd.exe` on Windows); the loopback case now reads the listener's reply.
+  On Windows, with no working backend `Sandbox::detect` fails with
+  `SandboxError::Unavailable` (tested), so `[sandbox] mode = "required"`
+  keeps refusing to start there as on Linux and macOS (BMD-06).
+- `Backend` is `#[non_exhaustive]`: a `match` on it needs a wildcard arm.
+
 ## 0.6.1 — 2026-09-26
 
 Repo tag `v0.6.1`. Patch only: `bastion-providers` 0.2.6 → 0.2.7,

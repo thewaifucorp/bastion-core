@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use bastion_agent_runtime::{HarnessConfinement, HarnessLaunch, SandboxProfile, WorkspacePolicy};
 use bastion_sandbox::{Sandbox, HELPER_MARKER};
@@ -63,6 +63,24 @@ fn fixture() -> Fixture {
     }
 }
 
+/// The shell every harness here is, its script flag, and the environment it
+/// needs to start. On Windows `cmd.exe`, whose scripts below avoid quotes
+/// (`cmd` does not unescape them).
+fn shell() -> (PathBuf, &'static str, BTreeMap<String, String>) {
+    let mut env: BTreeMap<String, String> =
+        [("SESSION_VAR".to_string(), "session-value".to_string())].into();
+    if cfg!(windows) {
+        let root = std::env::var("SystemRoot").expect("SystemRoot");
+        let system32 = Path::new(&root).join("System32");
+        env.insert("PATH".to_string(), system32.to_string_lossy().into_owned());
+        env.insert("SystemRoot".to_string(), root);
+        (system32.join("cmd.exe"), "/c", env)
+    } else {
+        env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
+        (PathBuf::from("/bin/sh"), "-c", env)
+    }
+}
+
 /// Runs `script` as the harness through `confinement` and returns stdout.
 async fn run(
     confinement: &HarnessConfinement,
@@ -70,21 +88,17 @@ async fn run(
     profile: SandboxProfile,
     script: &str,
 ) -> String {
-    let env: BTreeMap<String, String> = [
-        ("PATH".to_string(), "/usr/bin:/bin".to_string()),
-        ("SESSION_VAR".to_string(), "session-value".to_string()),
-    ]
-    .into();
+    let (program, flag, env) = shell();
     let launch = HarnessLaunch {
-        program: Path::new("/bin/sh"),
-        args: vec!["-c".into(), script.into()],
+        program: &program,
+        args: vec![flag.into(), script.into()],
         env: &env,
         workspace,
         profile,
     };
     let mut command = if profile == SandboxProfile::Trusted {
-        let mut c = tokio::process::Command::new("/bin/sh");
-        c.args(["-c", script]).env_clear().envs(&env);
+        let mut c = tokio::process::Command::new(&program);
+        c.args([flag, script]).env_clear().envs(&env);
         c
     } else {
         confinement.command(launch).expect("confined command")
@@ -103,15 +117,29 @@ async fn confined_harness_sees_workspace_and_grants_only(sandbox: &Sandbox) {
         read_only: false,
         deny: Vec::new(),
     };
-    let script = format!(
-        "echo ws > work.txt && echo WS_OK; \
-         echo st > '{state}/state.txt' && echo STATE_OK; \
-         cat '{secret}' && echo SECRET_READ; \
-         echo \"env=$SESSION_VAR daemon=$DAEMON_ONLY_SECRET\"; \
-         echo \"tmp=$TMPDIR\"; touch \"$TMPDIR/t\" && echo TMP_OK",
-        state = fx.state.display(),
-        secret = fx.secret.display(),
-    );
+    let script = if cfg!(windows) {
+        // An undefined `%VAR%` stays literal in `cmd /c`, so the daemon's
+        // variable shows up as its own name, never as its value.
+        format!(
+            "echo ws>work.txt && echo WS_OK & \
+             echo st>{state}\\state.txt && echo STATE_OK & \
+             type {secret} && echo SECRET_READ & \
+             echo env=%SESSION_VAR% daemon=%DAEMON_ONLY_SECRET% & \
+             echo tmp=%TMPDIR%& type nul>%TMPDIR%\\t && echo TMP_OK",
+            state = fx.state.display(),
+            secret = fx.secret.display(),
+        )
+    } else {
+        format!(
+            "echo ws > work.txt && echo WS_OK; \
+             echo st > '{state}/state.txt' && echo STATE_OK; \
+             cat '{secret}' && echo SECRET_READ; \
+             echo \"env=$SESSION_VAR daemon=$DAEMON_ONLY_SECRET\"; \
+             echo \"tmp=$TMPDIR\"; touch \"$TMPDIR/t\" && echo TMP_OK",
+            state = fx.state.display(),
+            secret = fx.secret.display(),
+        )
+    };
     let out = run(
         &confinement,
         &workspace,
@@ -162,7 +190,11 @@ async fn trusted_profile_is_not_confined(sandbox: &Sandbox) {
         &confinement,
         &workspace,
         SandboxProfile::Trusted,
-        &format!("cat '{}'", fx.secret.display()),
+        &if cfg!(windows) {
+            format!("type {}", fx.secret.display())
+        } else {
+            format!("cat '{}'", fx.secret.display())
+        },
     )
     .await;
     assert!(out.contains("PRIVATE-KEY"), "fixture broken: {out}");
