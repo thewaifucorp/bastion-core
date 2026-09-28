@@ -406,6 +406,7 @@ pub async fn check_resume<R: AgentRuntime>(runtime: &R, spec: &SessionSpec) -> C
         timeout: spec.timeout,
         permissions: spec.permissions.clone(),
         env: spec.env.clone(),
+        mcp_bridge: spec.mcp_bridge.clone(),
     };
     let result = runtime.resume(&handle, resume_spec).await;
     if supports_resume {

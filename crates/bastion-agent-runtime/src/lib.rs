@@ -27,6 +27,7 @@
 
 pub mod acp;
 pub mod acpx;
+pub mod claude_code;
 pub mod codex;
 pub mod confine;
 pub mod conformance;
@@ -340,6 +341,14 @@ pub struct ResumeSpec {
     pub timeout: TimeoutPolicy,
     pub permissions: PermissionProfile,
     pub env: EnvPolicy,
+    /// The MCP servers the reattached session gets, same as
+    /// [`SessionSpec::mcp_bridge`]. An adapter that respawns its harness on
+    /// resume (e.g. [`crate::claude_code`]) hands them over again, so a
+    /// restart does not silently cut the harness off from Bastion's memory
+    /// and capabilities; one whose reattach protocol cannot take them
+    /// ignores the field. `#[serde(default)]` keeps older payloads readable.
+    #[serde(default)]
+    pub mcp_bridge: Option<McpBridgeSpec>,
 }
 
 /// Everything needed to open a session. Built by the composition layer —

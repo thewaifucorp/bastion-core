@@ -308,6 +308,7 @@ async fn codex_resume_smoke() {
             allow: vec!["*".to_string()],
         },
         env: EnvPolicy { allow: base_env() },
+        mcp_bridge: None,
     };
     let mut resumed = runtime
         .resume(&handle, resume_spec)

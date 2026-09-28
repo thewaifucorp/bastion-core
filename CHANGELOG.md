@@ -80,6 +80,25 @@ rest is additive — `bastion-mesh` 0.1.0 → 0.1.1 (the `devices` module),
 
 ### Added
 
+- **`claude` runtime: Claude Code on the user's subscription, under the
+  user's own login (`bastion-agent-runtime` `claude_code`).**
+  `ClaudeCodeRuntime` drives the installed, unmodified `claude` binary over
+  its stream-json mode (`-p --input-format stream-json --output-format
+  stream-json`), one process per session. Guarded tools ask Bastion first
+  (`--permission-prompt-tool stdio`): each `can_use_tool` request becomes a
+  `PermissionRequest` with the proposed edits, and `respond_permission`
+  answers it; a turn-scoped denial interrupts the turn and keeps the process.
+  The session loads none of the operator's Claude Code settings, pins the
+  asking permission mode, loads only the MCP servers Bastion bridged (in a
+  `0600` file, pre-allowed) and turns auto memory off. Every `ANTHROPIC_*`
+  variable and every other Claude credential or provider switch is withheld
+  from the binary; nothing reads `~/.claude`, collects a token or sends
+  Claude Code's identity itself. The Claude Code conversation is the child
+  of the Bastion session (`--session-id`, persisted handle with its working
+  directory, `--resume` after a restart, `NotResumable` when Claude Code no
+  longer has it). Offline tests run the full conformance suite against a
+  scripted `claude`.
+
 - **Remote capabilities on the owner's other devices (`bastion-mesh`
   `devices`, BMD-08..12, BMD-15).** Slice 2 of `multi-device-brain-and-nodes`.
   - `enrollment`: `DeviceId`, `Platform`, `Role { Primary { epoch } | Node
@@ -153,6 +172,15 @@ rest is additive — `bastion-mesh` 0.1.0 → 0.1.1 (the `devices` module),
   the call being dispatched as the resolution of an owner's approval, so a
   forwarding capability can pass it on.
 - `AgeIdentity::sign` / `verifying_key_bytes`.
+
+### Changed
+
+- **`ResumeSpec` gained `mcp_bridge: Option<McpBridgeSpec>`**
+  (`#[serde(default)]`). `AgentLoop` passes the owner's bridged MCP servers
+  when it reattaches a runtime session, so a restart no longer cuts the
+  harness off from Bastion's memory and capabilities. Struct-literal
+  constructions of `ResumeSpec` must add the field (`mcp_bridge: None` keeps
+  the old behavior).
 
 ## 0.7.0 — 2026-09-26
 
