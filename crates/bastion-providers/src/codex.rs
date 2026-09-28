@@ -870,6 +870,12 @@ fn parse_codex_response(body: &Value) -> LlmResponse {
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0) as u32,
             cache_write: 0,
+            reasoning_tokens: u
+                .get("output_tokens_details")
+                .and_then(|d| d.get("reasoning_tokens"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32,
+            response_model: body["model"].as_str().map(str::to_owned),
             ..Default::default()
         })
         .unwrap_or_default();
@@ -1011,6 +1017,11 @@ impl Provider for CodexProvider {
 
     fn name(&self) -> &'static str {
         "codex"
+    }
+
+    /// ChatGPT subscription login (BUP-03): no metered dollars.
+    fn cost_basis(&self) -> crate::types::CostBasis {
+        crate::types::CostBasis::Subscription
     }
 }
 

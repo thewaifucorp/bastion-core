@@ -30,6 +30,11 @@ use crate::types::{
 /// stream. Uses the same `.and_then(|v| v.as_u64())` idiom already used for
 /// `input_tokens` for the two prompt-caching fields (COST-01/D-14a).
 fn apply_message_start_usage(usage: &mut TokenUsage, event: &Value) {
+    // Messages API: `input_tokens` excludes cache reads/creations.
+    usage.convention = crate::types::UsageConvention::Disjoint;
+    if let Some(model) = event["message"]["model"].as_str() {
+        usage.response_model = Some(model.to_owned());
+    }
     if let Some(u) = event["message"]["usage"].as_object() {
         if let Some(inp) = u.get("input_tokens").and_then(|v| v.as_u64()) {
             usage.input_tokens = inp as u32;
@@ -394,7 +399,11 @@ fn parse_message(message: &Value) -> LlmResponse {
             _ => {}
         }
     }
-    let mut usage = TokenUsage::default();
+    let mut usage = TokenUsage {
+        convention: crate::types::UsageConvention::Disjoint,
+        response_model: message["model"].as_str().map(str::to_owned),
+        ..Default::default()
+    };
     let u = &message["usage"];
     usage.input_tokens = u["input_tokens"].as_u64().unwrap_or(0) as u32;
     usage.output_tokens = u["output_tokens"].as_u64().unwrap_or(0) as u32;

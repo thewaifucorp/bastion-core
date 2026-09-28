@@ -13,7 +13,7 @@ use crate::memory::SharedMemory;
 use crate::provider::{call_with_retry, SharedProvider};
 use crate::session::SessionManager;
 use crate::types::{
-    BastionError, CallConfig, ContentPart, DenyScope, Message, MessageContent, Role, TokenUsage,
+    BastionError, CallConfig, ContentPart, DenyScope, Message, MessageContent, Role,
 };
 use bastion_types::DeploymentContext;
 use opentelemetry::trace::{Span as _, SpanKind, Tracer as _};
@@ -239,6 +239,20 @@ pub struct AgentLoop {
     /// Bastion MCP servers handed to runtime-backed sessions
     /// ([`AgentLoop::with_runtime_mcp_bridge`]). `None` = no bridge.
     pub runtime_mcp_bridge: Option<crate::agent::runtime_turn::RuntimeMcpBridge>,
+    /// BUP-01: model prices (the packaged Langfuse table plus the operator
+    /// override). Defaults to the packaged table alone; a host with an
+    /// override injects it via [`AgentLoop::with_pricing`].
+    pub pricing: Arc<crate::pricing::Pricing>,
+    /// The meter and attribution scope of the turn in flight (set for the
+    /// duration of `run_turn_for_with_trust`). Every model call of the turn
+    /// — persona routing and dispatch, the tool loop, the fallback ladder,
+    /// compaction — is admitted and charged through it.
+    pub(crate) turn_meter: Option<(
+        Arc<crate::pricing::CostMeter>,
+        Arc<crate::pricing::MeterScope>,
+    )>,
+    /// BUP-04: usage of the last completed turn (tokens, calls, dollars).
+    last_turn_usage: Option<crate::task::UsageAccum>,
 }
 
 impl AgentLoop {
@@ -337,6 +351,48 @@ impl AgentLoop {
             live_runtime_sessions: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             runtime_session_idle: crate::agent::runtime_turn::DEFAULT_RUNTIME_SESSION_IDLE,
             runtime_mcp_bridge: None,
+            pricing: Arc::new(crate::pricing::Pricing::bundled()),
+            turn_meter: None,
+            last_turn_usage: None,
+        }
+    }
+
+    /// BUP-01: price model calls with `pricing` (typically the packaged
+    /// table plus the operator's override file) instead of the packaged
+    /// table alone.
+    pub fn with_pricing(mut self, pricing: Arc<crate::pricing::Pricing>) -> Self {
+        self.pricing = pricing;
+        self
+    }
+
+    /// BUP-04: tokens, model calls and dollars of the last completed turn —
+    /// a plain Respond/Act turn included. `None` before the first turn.
+    pub fn last_turn_usage(&self) -> Option<crate::task::UsageAccum> {
+        self.last_turn_usage
+    }
+
+    /// A meter charging the daily budget and session totals of this loop.
+    fn cost_meter(&self) -> Arc<crate::pricing::CostMeter> {
+        Arc::new(
+            crate::pricing::CostMeter::new(self.pricing.clone())
+                .with_ledger(self.session.clone(), self.daily_budget_usd),
+        )
+    }
+
+    /// The in-flight turn's meter and scope, or — outside a turn — a
+    /// background scope on the same ledger, so no call ever goes unmetered.
+    pub(crate) fn active_meter(
+        &self,
+    ) -> (
+        Arc<crate::pricing::CostMeter>,
+        Arc<crate::pricing::MeterScope>,
+    ) {
+        match &self.turn_meter {
+            Some((meter, scope)) => (meter.clone(), scope.clone()),
+            None => (
+                self.cost_meter(),
+                crate::pricing::MeterScope::background(None),
+            ),
         }
     }
 
@@ -656,6 +712,7 @@ impl AgentLoop {
             self.pending_tx.clone(),
             self.delegated_tasks.clone(),
             cancel_rx,
+            self.cost_meter(),
         );
 
         Ok(key)
@@ -779,6 +836,7 @@ impl AgentLoop {
             self.pending_tx.clone(),
             self.delegated_tasks.clone(),
             cancel_rx,
+            self.cost_meter(),
         );
 
         Ok(())
@@ -1298,10 +1356,18 @@ impl AgentLoop {
         // surfaces here as a plain `Err` instead of unwinding straight out
         // of `run_turn_for_with_trust` while the eager user-message append
         // above stays orphaned in session history.
-        match self
+        // BUP-04/05: every model call of this turn is admitted, traced and
+        // charged through one meter/scope — a plain Respond/Act turn
+        // included, not only a TaskCase.
+        let turn_scope = crate::pricing::MeterScope::turn(session_id.clone(), owner);
+        self.turn_meter = Some((self.cost_meter(), turn_scope.clone()));
+        let dispatched = self
             .run_turn_dispatch(&session_id, owner, user_input, untrusted, &mut turn_span)
-            .await
-        {
+            .await;
+        self.turn_meter = None;
+        let turn_usage = turn_scope.usage();
+        self.last_turn_usage = Some(turn_usage);
+        match dispatched {
             Ok(final_text) => {
                 // HOOK-03: output-validator — NL contestation detection → belief revocation (D-13).
                 // Runs after the response is produced (before return).
@@ -1315,6 +1381,10 @@ impl AgentLoop {
                     latency_ms,
                     session_id = %session_id,
                     owner,
+                    llm_calls = turn_usage.llm_calls,
+                    input_tokens = turn_usage.input_tokens,
+                    output_tokens = turn_usage.output_tokens,
+                    cost_usd = turn_usage.cost_usd.unwrap_or(0.0),
                 );
 
                 // SEAM #4: fechar span raiz do turn
@@ -1420,14 +1490,15 @@ impl AgentLoop {
             // change) — the seam is entirely in which handle this call site
             // reads from. `None` (the default) preserves today's exact
             // behavior byte-for-byte: the turn's own live provider.
-            if let Some(compaction_provider) = &self.compaction_provider {
-                let provider_ref = compaction_provider.read().await;
-                history = self
-                    .compactor
-                    .compact(session_id, &history, &**provider_ref, &self.session)
-                    .await?;
-            } else {
-                let provider_ref = self.provider.read().await;
+            let (meter, scope) = self.active_meter();
+            let compaction_target = self
+                .compaction_provider
+                .clone()
+                .unwrap_or_else(|| self.provider.clone());
+            let metered_compaction =
+                crate::pricing::MeteredProvider::wrap(compaction_target, meter, scope).await;
+            {
+                let provider_ref = metered_compaction.read().await;
                 history = self
                     .compactor
                     .compact(session_id, &history, &**provider_ref, &self.session)
@@ -1469,7 +1540,12 @@ impl AgentLoop {
             // alongside the `kernel` handle below.
             let forced_persona = self.forced_persona.take();
             let forced_cabinet = self.forced_cabinet.take();
-            let provider = self.provider.clone();
+            // BUP-05: the Responder (router, runner, Cabinet) only sees a
+            // metered handle, so each of its model calls is admitted before it
+            // runs and carries its own priced span.
+            let (meter, scope) = self.active_meter();
+            let provider =
+                crate::pricing::MeteredProvider::wrap(self.provider.clone(), meter, scope).await;
             let responder = self.responder.clone();
             let deployment = self.deployment.clone();
             let outcome = responder
@@ -1830,13 +1906,9 @@ impl AgentLoop {
 
                     rounds += 1;
 
-                    // Budget check BEFORE next cloud call (PROV-06)
+                    // Budget + price admission (PROV-06, BUP-02) happens inside
+                    // `complete_with_fallback_ladder`, BEFORE the call.
                     let provider_name = self.provider.read().await.name().to_owned();
-                    if provider_name != "ollama"
-                        && !self.session.check_budget(self.daily_budget_usd).await?
-                    {
-                        anyhow::bail!(BastionError::BudgetExceeded);
-                    }
 
                     // CR-02: fail-closed egress gate before the next cloud round. `history`
                     // now carries tool results (and prior turns) that may include LocalOnly
@@ -1844,22 +1916,9 @@ impl AgentLoop {
                     // the Cabinet synthesis gate. check_egress fails closed on None/LocalOnly.
                     crate::hooks::egress::check_egress(resolved_tier, &provider_name)?;
 
-                    // Next LLM call in the loop
-                    // SEAM #4: span filho chat {model} por provider call
-                    let (model_name, provider_system) = {
-                        let p = self.provider.read().await;
-                        (p.model_name().to_owned(), p.name().to_owned())
-                    };
-                    let chat_span_name = format!("chat {}", model_name);
-                    let mut chat_span = tracer
-                        .span_builder(chat_span_name)
-                        .with_kind(SpanKind::Client)
-                        .with_attributes(vec![
-                            KeyValue::new("gen_ai.operation.name", "chat"),
-                            KeyValue::new("gen_ai.system", provider_system),
-                            KeyValue::new("gen_ai.request.model", model_name),
-                        ])
-                        .start(&tracer);
+                    // Next LLM call in the loop. SEAM #4: the `chat {model}` span of
+                    // this call (usage, cost) is opened by the cost meter
+                    // (`pricing::meter`), shared by every model call site.
                     // SEC-05: a round whose results included an untrusted tool result
                     // quarantines ONLY this immediately-following completion call —
                     // drain/restore brackets it tightly (a live `TurnCapabilityScope`
@@ -1912,43 +1971,6 @@ impl AgentLoop {
                         self.complete_with_fallback_ladder(history, config, resolved_tier)
                             .await?
                     };
-                    // Record token usage and finish reason
-                    chat_span.set_attribute(KeyValue::new(
-                        "gen_ai.usage.input_tokens",
-                        next_response.usage.input_tokens as i64,
-                    ));
-                    chat_span.set_attribute(KeyValue::new(
-                        "gen_ai.usage.output_tokens",
-                        next_response.usage.output_tokens as i64,
-                    ));
-                    // D-14a: surface cache_read/cache_write (Plans 08-02/08-04) so the
-                    // cache-hit effect is observable, not just theoretically possible.
-                    chat_span.set_attributes(cache_usage_attributes(&next_response.usage));
-                    let finish_reason = if next_response.tool_calls.is_some() {
-                        "tool_calls"
-                    } else {
-                        "stop"
-                    };
-                    chat_span.set_attribute(KeyValue::new(
-                        "gen_ai.response.finish_reasons",
-                        finish_reason,
-                    ));
-                    // SECURITY: NÃO emitir gen_ai.input/output.messages por padrão (PII — T-05-05-01)
-                    // Opt-in via BASTION_OTEL_CONTENT_EVENTS=true
-                    if std::env::var("BASTION_OTEL_CONTENT_EVENTS").as_deref() == Ok("true") {
-                        chat_span.set_attribute(KeyValue::new(
-                            "gen_ai.output.messages",
-                            next_response.text.clone(),
-                        ));
-                    }
-                    chat_span.end();
-
-                    // Update budget with actual cost
-                    let cost_usd = estimate_cost_usd(&provider_name, &next_response.usage);
-                    if let Err(e) = self.session.update_budget(cost_usd).await {
-                        tracing::warn!(error = %e, "failed to update budget");
-                    }
-
                     response = next_response;
                 }
             }
@@ -1990,11 +2012,19 @@ impl AgentLoop {
         config: &CallConfig,
         resolved_tier: Option<crate::memory::PrivacyTier>,
     ) -> anyhow::Result<crate::types::LlmResponse> {
+        // BUP-02/05: admitted (price + daily budget) BEFORE the call and
+        // outside the retry/switch logic — a refusal is final, never a reason
+        // to retry or to switch to a fallback model.
+        let (meter, scope) = self.active_meter();
+        {
+            let provider = self.provider.read().await;
+            meter.admit(&**provider).await?;
+        }
         // Rung 1 — transient retry, exactly as today.
         let rung1 = {
             let provider = self.provider.read().await;
             let prov_ref: &dyn crate::provider::Provider = &**provider;
-            call_with_retry(|| prov_ref.complete(history, config), 3).await
+            call_with_retry(|| meter.call(prov_ref, &scope, history, config), 3).await
         };
         let original_err = match rung1 {
             Ok(resp) => return Ok(resp),
@@ -2036,12 +2066,15 @@ impl AgentLoop {
         // swap and BEFORE the retry call — a fallback that would violate the turn's
         // privacy tier never gets swapped in.
         crate::hooks::egress::check_egress(resolved_tier, new_provider.name())?;
+        // BUP-02: the fallback model must be priceable too, checked before
+        // the swap like egress.
+        meter.admit(&*new_provider).await?;
 
         *self.provider.write().await = new_provider;
 
         let provider = self.provider.read().await;
         let prov_ref: &dyn crate::provider::Provider = &**provider;
-        call_with_retry(|| prov_ref.complete(history, config), 3).await
+        call_with_retry(|| meter.call(prov_ref, &scope, history, config), 3).await
     }
 
     /// Classic tool-loop provider call — used as fallback when registry is empty.
@@ -2112,13 +2145,9 @@ impl AgentLoop {
                 anyhow::bail!(BastionError::ToolLoopCap);
             }
 
-            // Budget check BEFORE cloud call (PROV-06)
+            // Budget + price admission (PROV-06, BUP-02) happens inside
+            // `complete_with_fallback_ladder`, BEFORE the call.
             let provider_name = self.provider.read().await.name().to_owned();
-            if provider_name != "ollama"
-                && !self.session.check_budget(self.daily_budget_usd).await?
-            {
-                anyhow::bail!(BastionError::BudgetExceeded);
-            }
 
             // WR-01 (review #2): fail-closed egress gate on EVERY round, not just pre-loop.
             // Subsequent rounds re-send `history` (which may carry LocalOnly tool results) to
@@ -2133,12 +2162,6 @@ impl AgentLoop {
             let response = self
                 .complete_with_fallback_ladder(history, &config, resolved_tier)
                 .await?;
-
-            // Update budget with actual cost
-            let cost_usd = estimate_cost_usd(provider_name.as_str(), &response.usage);
-            if let Err(e) = self.session.update_budget(cost_usd).await {
-                tracing::warn!(error = %e, "failed to update budget");
-            }
 
             // Write assistant message to SQLite + history BEFORE dispatching tools (Pitfall 1).
             // History MUST carry tool_calls (ToolUse parts) — without them, tool-using models
@@ -2612,7 +2635,11 @@ fn spawn_delegated_task_consumer(
     pending_tx: mpsc::Sender<PendingItem>,
     delegated_tasks: Arc<tokio::sync::Mutex<std::collections::HashMap<String, mpsc::Sender<()>>>>,
     mut cancel_rx: mpsc::Receiver<()>,
+    meter: Arc<crate::pricing::CostMeter>,
 ) {
+    // BUP-03: the delegated task's tokens are attributed to its own
+    // persistence key (the same key its runtime session is stored under).
+    let usage_scope = crate::pricing::MeterScope::turn(key.clone(), owner.clone());
     tokio::spawn(async move {
         tracing::info!(event = "agent_runtime_delegated_task_started", key = %key, runtime_id = %runtime_id);
         let mut response_text = String::new();
@@ -2737,6 +2764,15 @@ fn spawn_delegated_task_consumer(
                                 input_tokens = delta.input_tokens,
                                 output_tokens = delta.output_tokens,
                             );
+                            meter
+                                .record_runtime_usage(
+                                    &usage_scope,
+                                    &runtime_id,
+                                    delta.input_tokens,
+                                    delta.output_tokens,
+                                    bastion_agent_runtime::BudgetCoverage::Reported,
+                                )
+                                .await;
                         }
                         bastion_agent_runtime::RuntimeEvent::Warning { code, detail, .. } => {
                             tracing::warn!(
@@ -2875,123 +2911,6 @@ fn frame_tool_result_content(source: &str, data: &serde_json::Value, trusted: bo
     }
 }
 
-/// Simple cost estimation for budget tracking.
-///
-/// SEC-02 (D-04/D-05): a provider's own reported per-request cost always wins when
-/// present (`TokenUsage.actual_cost_usd`, e.g. OpenRouter's `usage.cost`) — the
-/// hardcoded tables below are a fallback ONLY, used when the provider never reports a
-/// cost field at all (Gemini, always — confirmed no cost field exists in
-/// `usageMetadata`, RESEARCH Pitfall 3) or reports one that's momentarily absent.
-///
-/// Per AI-SPEC §4b.5: claude-sonnet-4-5 ≈ $3/1M input, $15/1M output
-fn estimate_cost_usd(provider: &str, usage: &TokenUsage) -> f64 {
-    if let Some(real) = usage.actual_cost_usd {
-        return real;
-    }
-
-    match provider {
-        // Claude on Amazon Bedrock and Google Vertex AI is priced like the
-        // Anthropic API for the same model.
-        "anthropic" | "bedrock" | "vertex" => {
-            let input_cost = usage.input_tokens as f64 * 3.0 / 1_000_000.0;
-            let output_cost = usage.output_tokens as f64 * 15.0 / 1_000_000.0;
-            input_cost + output_cost
-        }
-        "openai" => {
-            let input_cost = usage.input_tokens as f64 * 2.5 / 1_000_000.0;
-            let output_cost = usage.output_tokens as f64 * 10.0 / 1_000_000.0;
-            input_cost + output_cost
-        }
-        // OpenRouter aggregates many models at different price points; `usage.cost`
-        // (real, per-request) is the normal path and always wins above. This is a
-        // conservative blended-average estimate for the rare case that field is
-        // momentarily missing — never 0.0 for a paid provider (SEC-02, the original
-        // defect being fixed here). Source: openrouter.ai/models blended free+paid
-        // average as of 2026-07.
-        "openrouter" => {
-            let input_cost = usage.input_tokens as f64 * 0.5 / 1_000_000.0;
-            let output_cost = usage.output_tokens as f64 * 1.5 / 1_000_000.0;
-            input_cost + output_cost
-        }
-        // Gemini never reports a cost field (RESEARCH Pitfall 3) — this arm is always
-        // consulted for Gemini, not just a fallback. Rates match Gemini 2.5 Flash
-        // published pricing as of 2026-07 (ai.google.dev/pricing).
-        "gemini" => {
-            let input_cost = usage.input_tokens as f64 * 0.3 / 1_000_000.0;
-            let output_cost = usage.output_tokens as f64 * 2.5 / 1_000_000.0;
-            input_cost + output_cost
-        }
-        // Groq aggregates several open models at different price points and,
-        // like OpenRouter/Gemini, never populates a per-request cost field
-        // (GroqProvider::map_usage doesn't set actual_cost_usd) — this arm is
-        // the ONLY path ever consulted for Groq (milestone-close code review,
-        // 2026-07-13: same SEC-02 zero-cost-bypass defect already fixed above
-        // for openrouter/gemini, missed for the native groq provider added
-        // this same milestone). Conservative blended-average across Groq's
-        // published per-model pricing as of 2026-07 (console.groq.com/docs/pricing)
-        // — never 0.0 for a paid provider.
-        "groq" => {
-            let input_cost = usage.input_tokens as f64 * 0.2 / 1_000_000.0;
-            let output_cost = usage.output_tokens as f64 * 0.5 / 1_000_000.0;
-            input_cost + output_cost
-        }
-        "ollama" => 0.0, // local — no cost
-        _ => 0.0,
-    }
-}
-
-/// D-14a: `gen_ai.usage.cache_read_tokens`/`gen_ai.usage.cache_write_tokens` OTel span
-/// attributes, mirroring the existing `gen_ai.usage.input_tokens`/`output_tokens` naming
-/// convention. `TokenUsage.cache_read`/`cache_write` are populated by Plans 08-02
-/// (Anthropic `cache_control`) and 08-04 (OpenAI/Groq/OpenRouter `prompt_tokens_details.
-/// cached_tokens`) — this is the missing telemetry step that surfaces them.
-///
-/// Always emits BOTH attributes, including the `0` case — Groq's expected-zero
-/// `cache_read` (Pitfall 6) must be an observable measured `0`, not an absent field, so a
-/// dashboard can distinguish "measured zero" from "not wired".
-fn cache_usage_attributes(usage: &TokenUsage) -> Vec<KeyValue> {
-    vec![
-        KeyValue::new("gen_ai.usage.cache_read_tokens", usage.cache_read as i64),
-        KeyValue::new("gen_ai.usage.cache_write_tokens", usage.cache_write as i64),
-    ]
-}
-
-#[cfg(test)]
-mod cache_usage_attributes_tests {
-    use super::{cache_usage_attributes, TokenUsage};
-
-    #[test]
-    fn emits_both_attributes_including_zero() {
-        let usage = TokenUsage {
-            input_tokens: 100,
-            output_tokens: 20,
-            cache_read: 0,
-            cache_write: 0,
-            ..Default::default()
-        };
-        let attrs = cache_usage_attributes(&usage);
-        assert_eq!(attrs.len(), 2);
-        assert_eq!(attrs[0].key.as_str(), "gen_ai.usage.cache_read_tokens");
-        assert_eq!(attrs[0].value.to_string(), "0");
-        assert_eq!(attrs[1].key.as_str(), "gen_ai.usage.cache_write_tokens");
-        assert_eq!(attrs[1].value.to_string(), "0");
-    }
-
-    #[test]
-    fn emits_nonzero_values() {
-        let usage = TokenUsage {
-            input_tokens: 100,
-            output_tokens: 20,
-            cache_read: 1200,
-            cache_write: 340,
-            ..Default::default()
-        };
-        let attrs = cache_usage_attributes(&usage);
-        assert_eq!(attrs[0].value.to_string(), "1200");
-        assert_eq!(attrs[1].value.to_string(), "340");
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Tests (offline — MockProvider + temp-DB memory + single-persona registry)
 // ---------------------------------------------------------------------------
@@ -3021,71 +2940,6 @@ mod tests {
     use std::sync::Arc;
     use tempfile::NamedTempFile;
     use tokio::sync::RwLock;
-
-    #[test]
-    fn estimate_cost_usd_real_cost_always_wins_over_hardcoded_table() {
-        let usage = TokenUsage {
-            actual_cost_usd: Some(0.0021),
-            ..Default::default()
-        };
-        assert_eq!(estimate_cost_usd("openrouter", &usage), 0.0021);
-    }
-
-    #[test]
-    fn estimate_cost_usd_openrouter_fallback_is_never_zero() {
-        let usage = TokenUsage {
-            actual_cost_usd: None,
-            input_tokens: 1000,
-            output_tokens: 500,
-            ..Default::default()
-        };
-        assert!(estimate_cost_usd("openrouter", &usage) > 0.0);
-    }
-
-    /// Regression (milestone-close code review, 2026-07-13): groq was added as
-    /// a native provider this milestone but had no arm here, so it fell through
-    /// to `_ => 0.0` — the exact SEC-02 zero-cost budget bypass already fixed
-    /// above for openrouter/gemini.
-    #[test]
-    fn estimate_cost_usd_groq_fallback_is_never_zero() {
-        let usage = TokenUsage {
-            actual_cost_usd: None,
-            input_tokens: 1000,
-            output_tokens: 500,
-            ..Default::default()
-        };
-        assert!(estimate_cost_usd("groq", &usage) > 0.0);
-    }
-
-    #[test]
-    fn estimate_cost_usd_gemini_fallback_is_never_zero() {
-        let usage = TokenUsage {
-            actual_cost_usd: None,
-            input_tokens: 1000,
-            output_tokens: 500,
-            ..Default::default()
-        };
-        assert!(estimate_cost_usd("gemini", &usage) > 0.0);
-    }
-
-    #[test]
-    fn estimate_cost_usd_existing_providers_unchanged() {
-        let usage = TokenUsage {
-            actual_cost_usd: None,
-            input_tokens: 1000,
-            output_tokens: 500,
-            ..Default::default()
-        };
-        assert_eq!(
-            estimate_cost_usd("anthropic", &usage),
-            1000.0 * 3.0 / 1_000_000.0 + 500.0 * 15.0 / 1_000_000.0
-        );
-        assert_eq!(
-            estimate_cost_usd("openai", &usage),
-            1000.0 * 2.5 / 1_000_000.0 + 500.0 * 10.0 / 1_000_000.0
-        );
-        assert_eq!(estimate_cost_usd("ollama", &usage), 0.0);
-    }
 
     // MockProvider: complete_simple echoes a persona response.
     struct MockProvider {
@@ -3118,6 +2972,9 @@ mod tests {
         }
         fn name(&self) -> &'static str {
             "mock"
+        }
+        fn cost_basis(&self) -> crate::types::CostBasis {
+            crate::types::CostBasis::Local
         }
     }
 
@@ -3608,6 +3465,9 @@ mod tests {
         fn name(&self) -> &'static str {
             "primary"
         }
+        fn cost_basis(&self) -> crate::types::CostBasis {
+            crate::types::CostBasis::Local
+        }
     }
 
     #[tokio::test]
@@ -3641,6 +3501,9 @@ mod tests {
             }
             fn name(&self) -> &'static str {
                 "fallback"
+            }
+            fn cost_basis(&self) -> crate::types::CostBasis {
+                crate::types::CostBasis::Local
             }
         }
 
@@ -3792,6 +3655,9 @@ mod tests {
         }
         fn name(&self) -> &'static str {
             "mock"
+        }
+        fn cost_basis(&self) -> crate::types::CostBasis {
+            crate::types::CostBasis::Local
         }
     }
 
@@ -4446,5 +4312,166 @@ mod tests {
         assert!(reply.contains("expirou e foi negado"), "{reply}");
         assert!(!reply.contains("Feito."), "{reply}");
         assert_eq!(pending_permissions(&agent).await, 0);
+    }
+
+    // ------------------------------------------------------------------
+    // Model pricing and metering (BUP-01..05)
+    // ------------------------------------------------------------------
+
+    struct PricedMock {
+        model: &'static str,
+        basis: crate::types::CostBasis,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Provider for PricedMock {
+        async fn complete(&self, _: &[Message], _: &CallConfig) -> anyhow::Result<LlmResponse> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(LlmResponse {
+                text: "priced answer".into(),
+                tool_calls: None,
+                usage: crate::types::TokenUsage {
+                    input_tokens: 1_000,
+                    output_tokens: 500,
+                    ..Default::default()
+                },
+            })
+        }
+        async fn complete_simple(&self, _: &str) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+        fn context_limit(&self) -> usize {
+            128_000
+        }
+        fn model_name(&self) -> &str {
+            self.model
+        }
+        fn name(&self) -> &'static str {
+            "openai"
+        }
+        fn cost_basis(&self) -> crate::types::CostBasis {
+            self.basis
+        }
+    }
+
+    async fn priced_loop(
+        db_path: &str,
+        model: &'static str,
+        basis: crate::types::CostBasis,
+    ) -> (AgentLoop, Arc<std::sync::atomic::AtomicUsize>) {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let agent = make_loop(db_path).await;
+        *agent.provider.write().await = Box::new(PricedMock {
+            model,
+            basis,
+            calls: calls.clone(),
+        });
+        (agent, calls)
+    }
+
+    /// BUP-04/05: a plain turn (no TaskCase) is priced from the table, and
+    /// the turn total, the daily budget and the session total hold the
+    /// same number.
+    #[tokio::test]
+    async fn plain_turn_is_priced_and_budget_matches_turn_total() {
+        let db = NamedTempFile::new().unwrap();
+        let (mut agent, calls) = priced_loop(
+            db.path().to_str().unwrap(),
+            "gpt-4o",
+            crate::types::CostBasis::Metered,
+        )
+        .await;
+        let reply = agent.run_turn_for("hello", DEFAULT_OWNER).await.unwrap();
+        assert_eq!(reply, "priced answer");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let expected = crate::pricing::Pricing::bundled()
+            .cost_of_call(
+                crate::types::CostBasis::Metered,
+                "gpt-4o",
+                &crate::types::TokenUsage {
+                    input_tokens: 1_000,
+                    output_tokens: 500,
+                    ..Default::default()
+                },
+            )
+            .usd
+            .unwrap();
+        let turn = agent.last_turn_usage().unwrap();
+        assert_eq!(turn.llm_calls, 1);
+        assert_eq!(turn.cost_usd, Some(expected));
+        assert_eq!(agent.session.spent_today().await.unwrap(), expected);
+        let session_total = agent.session.session_usage(&agent.session_id).await.unwrap();
+        assert_eq!(session_total.cost_usd, Some(expected));
+        assert_eq!(session_total.input_tokens, 1_000);
+    }
+
+    /// BUP-02: a metered model with no price is refused BEFORE the call.
+    #[tokio::test]
+    async fn unpriced_metered_model_fails_closed_before_the_call() {
+        let db = NamedTempFile::new().unwrap();
+        let (mut agent, calls) = priced_loop(
+            db.path().to_str().unwrap(),
+            "house-model-without-price",
+            crate::types::CostBasis::Metered,
+        )
+        .await;
+        let err = agent.run_turn_for("hello", DEFAULT_OWNER).await.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<BastionError>(),
+                Some(BastionError::PriceUnknown { model, .. }) if model == "house-model-without-price"
+            ),
+            "{err:#}"
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(agent.session.spent_today().await.unwrap(), 0.0);
+    }
+
+    /// BUP-02: the same model runs, at the override price, once the
+    /// operator adds an override entry for it.
+    #[tokio::test]
+    async fn override_price_lets_the_model_run() {
+        let db = NamedTempFile::new().unwrap();
+        let (agent, calls) = priced_loop(
+            db.path().to_str().unwrap(),
+            "house-model-without-price",
+            crate::types::CostBasis::Metered,
+        )
+        .await;
+        let pricing = crate::pricing::Pricing::bundled()
+            .with_override_json(
+                r#"[{"modelName":"house","matchPattern":"^house-model-without-price$",
+                "pricingTiers":[{"name":"S","isDefault":true,"priority":0,"conditions":[],
+                "prices":{"input":1e-6,"output":2e-6}}]}]"#,
+                "prices.json",
+            )
+            .unwrap();
+        let mut agent = agent.with_pricing(Arc::new(pricing));
+        agent.run_turn_for("hello", DEFAULT_OWNER).await.unwrap();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let expected = 1_000.0 * 1e-6 + 500.0 * 2e-6;
+        assert_eq!(agent.last_turn_usage().unwrap().cost_usd, Some(expected));
+        assert_eq!(agent.session.spent_today().await.unwrap(), expected);
+    }
+
+    /// BUP-03: a subscription turn needs no price and does not consume
+    /// `daily_budget_usd`; its tokens are still recorded.
+    #[tokio::test]
+    async fn subscription_turn_does_not_consume_the_budget() {
+        let db = NamedTempFile::new().unwrap();
+        let (mut agent, calls) = priced_loop(
+            db.path().to_str().unwrap(),
+            "gpt-5-codex-subscription",
+            crate::types::CostBasis::Subscription,
+        )
+        .await;
+        agent.run_turn_for("hello", DEFAULT_OWNER).await.unwrap();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(agent.session.spent_today().await.unwrap(), 0.0);
+        let turn = agent.last_turn_usage().unwrap();
+        assert_eq!(turn.cost_usd, Some(0.0));
+        assert_eq!(turn.input_tokens, 1_000);
     }
 }

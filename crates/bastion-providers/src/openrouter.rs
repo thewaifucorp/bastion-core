@@ -151,7 +151,12 @@ fn map_usage(json: &serde_json::Value) -> TokenUsage {
             .as_u64()
             .unwrap_or(0) as u32,
         cache_write: 0,
+        reasoning_tokens: json["usage"]["completion_tokens_details"]["reasoning_tokens"]
+            .as_u64()
+            .unwrap_or(0) as u32,
+        response_model: json["model"].as_str().map(str::to_owned),
         actual_cost_usd: json["usage"]["cost"].as_f64(),
+        ..Default::default()
     }
 }
 
@@ -232,6 +237,12 @@ impl Provider for OpenRouterProvider {
     }
     fn name(&self) -> &'static str {
         "openrouter"
+    }
+
+    /// OpenRouter returns the real per-request cost (`usage.cost`), which
+    /// wins over the price table — so a model the table does not list may run.
+    fn reports_cost(&self) -> bool {
+        true
     }
 }
 

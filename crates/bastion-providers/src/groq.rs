@@ -159,6 +159,10 @@ fn map_usage(json: &serde_json::Value) -> TokenUsage {
             .as_u64()
             .unwrap_or(0) as u32,
         cache_write: 0,
+        reasoning_tokens: json["usage"]["completion_tokens_details"]["reasoning_tokens"]
+            .as_u64()
+            .unwrap_or(0) as u32,
+        response_model: json["model"].as_str().map(str::to_owned),
         ..Default::default()
     }
 }

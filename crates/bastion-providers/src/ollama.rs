@@ -262,6 +262,7 @@ fn parse_native_response(json: &Value) -> anyhow::Result<LlmResponse> {
     let usage = TokenUsage {
         input_tokens: json["prompt_eval_count"].as_u64().unwrap_or(0) as u32,
         output_tokens: json["eval_count"].as_u64().unwrap_or(0) as u32,
+        response_model: json["model"].as_str().map(str::to_owned),
         ..Default::default()
     };
 
@@ -360,7 +361,7 @@ impl Provider for OllamaProvider {
             })
             .collect();
 
-        let usage = response
+        let mut usage = response
             .usage
             .map(|u| TokenUsage {
                 input_tokens: u.prompt_tokens,
@@ -368,6 +369,7 @@ impl Provider for OllamaProvider {
                 ..Default::default()
             })
             .unwrap_or_default();
+        usage.response_model = Some(response.model);
 
         Ok(LlmResponse {
             text,
@@ -401,6 +403,11 @@ impl Provider for OllamaProvider {
     }
     fn name(&self) -> &'static str {
         "ollama"
+    }
+
+    /// A model on the operator's own hardware: no metered dollars.
+    fn cost_basis(&self) -> crate::types::CostBasis {
+        crate::types::CostBasis::Local
     }
 
     // D-09: no override needed. Ollama inherits the trait default (`true`) — it DOES
