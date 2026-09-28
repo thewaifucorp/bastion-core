@@ -76,6 +76,7 @@ mod learn/mod.rs:dedup
 mod learn/mod.rs:delta
 fn learn/mod.rs:new
 fn learn/mod.rs:run
+fn learn/mod.rs:with_pricing
 use lib.rs:*
 mod lib.rs:agent
 mod lib.rs:cabinet
