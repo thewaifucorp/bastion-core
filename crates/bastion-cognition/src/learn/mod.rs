@@ -119,6 +119,8 @@ pub struct LlmCandidateGenerator {
     /// Opt-in (`[reflector].allow_cloud`): when false (default), the outbound log tail is
     /// treated as LocalOnly and the egress chokepoint refuses a non-local provider.
     allow_cloud: bool,
+    /// Model prices used to hold each tick's single call under `budget_usd`.
+    pricing: Arc<bastion_runtime::pricing::Pricing>,
 }
 
 impl LlmCandidateGenerator {
@@ -127,7 +129,15 @@ impl LlmCandidateGenerator {
             provider,
             model,
             allow_cloud,
+            pricing: Arc::new(bastion_runtime::pricing::Pricing::bundled()),
         }
+    }
+
+    /// BUP-01: price the per-tick budget check with `pricing` (the packaged
+    /// table plus the operator override) instead of the packaged table alone.
+    pub fn with_pricing(mut self, pricing: Arc<bastion_runtime::pricing::Pricing>) -> Self {
+        self.pricing = pricing;
+        self
     }
 }
 
@@ -159,6 +169,7 @@ impl CandidateGenerator for LlmCandidateGenerator {
             or polite the assistant was. \
             Full shape: {\"deltas\":[...],\"quality\":0.0}";
         let user = format!("Log excerpt since last run:\n{log_tail}");
+        let user_len = user.len();
         let provider = self.provider.read().await;
         // CR-01 (egress chokepoint): the log tail may contain LocalOnly context. Treat it as
         // LocalOnly by default (deny-on-ambiguity) and route through the project's one egress
@@ -214,6 +225,33 @@ impl CandidateGenerator for LlmCandidateGenerator {
             // stable/volatile split applies here.
             cache_stable_prefix_end: None,
         };
+        // BUP-01/02: `budget_usd` is a dollar cap, so it is checked against the
+        // model's real price BEFORE the call — the most this one call can cost
+        // (the prompt, estimated at ~4 chars/token, plus the full output
+        // allowance). A metered model with no price fails closed; a local or
+        // subscription model costs nothing and always fits.
+        let basis = provider.cost_basis();
+        if basis.is_metered() && !provider.reports_cost() {
+            self.pricing
+                .ensure_priced(basis, false, provider.model_name())?;
+            let prompt_tokens = ((system.len() + user_len) / 4) as u64;
+            if let Some(ceiling) = self.pricing.estimate_ceiling(
+                provider.model_name(),
+                prompt_tokens,
+                config.max_tokens as u64,
+            ) {
+                if ceiling > budget_usd {
+                    tracing::warn!(
+                        event = "reflector_budget_capped",
+                        model = provider.model_name(),
+                        ceiling_usd = ceiling,
+                        budget_usd,
+                        "Reflector tick skipped: one call could cost more than [reflector].budget_usd"
+                    );
+                    return Ok(Reflection::default());
+                }
+            }
+        }
         // The forced-tool-call helper needs a mutable registry to register/remove its
         // ephemeral, pure-echo `StructuredOutputCapability` (RAII-scoped within the one
         // call). A fresh empty registry is the correct isolated context — the dispatch
@@ -730,6 +768,9 @@ mod tests {
         fn name(&self) -> &'static str {
             "mock"
         }
+        fn cost_basis(&self) -> crate::types::CostBasis {
+            crate::types::CostBasis::Local
+        }
         fn supports_json_schema(&self) -> bool {
             self.supports_schema
         }
@@ -947,6 +988,83 @@ mod tests {
             Some(0.8),
             "quality must still be parsed from the forced-tool-call payload"
         );
+    }
+
+    // ---- LlmCandidateGenerator budget priced from the model table (BUP-01/02) ----
+
+    /// `CountingProvider`'s behavior on a METERED model named `model`.
+    struct MeteredCounting {
+        inner: CountingProvider,
+        model: &'static str,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::provider::Provider for MeteredCounting {
+        async fn complete(
+            &self,
+            messages: &[Message],
+            config: &CallConfig,
+        ) -> anyhow::Result<crate::types::LlmResponse> {
+            crate::provider::Provider::complete(&self.inner, messages, config).await
+        }
+        async fn complete_simple(&self, prompt: &str) -> anyhow::Result<String> {
+            crate::provider::Provider::complete_simple(&self.inner, prompt).await
+        }
+        fn context_limit(&self) -> usize {
+            crate::provider::Provider::context_limit(&self.inner)
+        }
+        fn model_name(&self) -> &str {
+            self.model
+        }
+        fn name(&self) -> &'static str {
+            "openai"
+        }
+    }
+
+    fn metered(model: &'static str, calls: &Arc<AtomicUsize>) -> SharedProvider {
+        Arc::new(RwLock::new(Box::new(MeteredCounting {
+            inner: CountingProvider {
+                calls: calls.clone(),
+                supports_schema: true,
+            },
+            model,
+        })))
+    }
+
+    #[tokio::test]
+    async fn llm_generator_unpriced_metered_model_fails_closed() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let gen = LlmCandidateGenerator::new(metered("house-model-xyz", &calls), None, true);
+        let err = gen.generate("some new log content", 10.0).await.unwrap_err();
+        assert!(err.to_string().contains("house-model-xyz"), "{err}");
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn llm_generator_skips_a_call_its_budget_cannot_cover() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let gen = LlmCandidateGenerator::new(metered("gpt-4o", &calls), None, true);
+        // 800 output tokens of gpt-4o alone cost more than $0.000001.
+        let out = gen.generate("some new log content", 0.000_001).await.unwrap();
+        assert!(out.deltas.is_empty() && out.quality.is_none());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn llm_generator_runs_a_priced_call_within_budget() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let pricing = bastion_runtime::pricing::Pricing::bundled()
+            .with_override_json(
+                r#"[{"modelName":"house","matchPattern":"^house-model-xyz$",
+                "pricingTiers":[{"name":"S","isDefault":true,"priority":0,"conditions":[],
+                "prices":{"input":1e-9,"output":1e-9}}]}]"#,
+                "prices.json",
+            )
+            .unwrap();
+        let gen = LlmCandidateGenerator::new(metered("house-model-xyz", &calls), None, true)
+            .with_pricing(Arc::new(pricing));
+        gen.generate("some new log content", 0.10).await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     // ---- Reflector::tick gate-then-apply ----
