@@ -207,10 +207,9 @@ impl TokenUsage {
                 u64::from(self.input_tokens).saturating_sub(cache_read + cache_write),
                 u64::from(self.output_tokens).saturating_sub(reasoning),
             ),
-            UsageConvention::Disjoint => (
-                u64::from(self.input_tokens),
-                u64::from(self.output_tokens),
-            ),
+            UsageConvention::Disjoint => {
+                (u64::from(self.input_tokens), u64::from(self.output_tokens))
+            }
         };
         UsageBuckets {
             input,
@@ -904,7 +903,10 @@ mod tests {
             ..Default::default()
         };
         let b = usage.buckets();
-        assert_eq!((b.input, b.cache_read, b.cache_write, b.output), (50, 1000, 200, 20));
+        assert_eq!(
+            (b.input, b.cache_read, b.cache_write, b.output),
+            (50, 1000, 200, 20)
+        );
         assert_eq!(b.input_total(), 1250);
     }
 

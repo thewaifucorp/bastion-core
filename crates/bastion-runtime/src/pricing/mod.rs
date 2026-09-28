@@ -349,12 +349,8 @@ impl PriceTable {
         let raw: Vec<RawModel> = serde_json::from_str(json).map_err(|e| e.to_string())?;
         let mut models = Vec::with_capacity(raw.len());
         for m in raw {
-            let pattern = Regex::new(&m.match_pattern).map_err(|e| {
-                format!(
-                    "matchPattern of `{}` does not compile: {e}",
-                    m.model_name
-                )
-            })?;
+            let pattern = Regex::new(&m.match_pattern)
+                .map_err(|e| format!("matchPattern of `{}` does not compile: {e}", m.model_name))?;
             let mut tiers = Vec::new();
             let mut default_tier = None;
             for t in m.pricing_tiers {
@@ -830,7 +826,10 @@ mod tests {
             output_tokens: 1_000,
             ..Default::default()
         };
-        let a = p.cost_of_call(CostBasis::Metered, "gpt-4o", &usage).usd.unwrap();
+        let a = p
+            .cost_of_call(CostBasis::Metered, "gpt-4o", &usage)
+            .usd
+            .unwrap();
         let b = p
             .cost_of_call(CostBasis::Metered, "gpt-4o-mini", &usage)
             .usd
@@ -852,10 +851,18 @@ mod tests {
             output: 1_000,
             ..Default::default()
         };
-        let (PriceOutcome::Priced { tier: small_tier, .. }, PriceOutcome::Priced { tier: large_tier, .. }) = (
+        let (
+            PriceOutcome::Priced {
+                tier: small_tier, ..
+            },
+            PriceOutcome::Priced {
+                tier: large_tier, ..
+            },
+        ) = (
             p.price(&["gemini-2.5-pro"], &small, &attrs),
             p.price(&["gemini-2.5-pro"], &large, &attrs),
-        ) else {
+        )
+        else {
             panic!("gemini-2.5-pro must be priced");
         };
         assert_eq!(small_tier, "Standard");
@@ -889,12 +896,19 @@ mod tests {
             ..Default::default()
         };
         let as_mini = p
-            .cost_of_call(CostBasis::Metered, "gpt-4o-mini", &TokenUsage {
-                response_model: None,
-                ..usage.clone()
-            })
+            .cost_of_call(
+                CostBasis::Metered,
+                "gpt-4o-mini",
+                &TokenUsage {
+                    response_model: None,
+                    ..usage.clone()
+                },
+            )
             .usd;
-        assert_eq!(p.cost_of_call(CostBasis::Metered, "gpt-4o", &usage).usd, as_mini);
+        assert_eq!(
+            p.cost_of_call(CostBasis::Metered, "gpt-4o", &usage).usd,
+            as_mini
+        );
     }
 
     #[test]
@@ -945,7 +959,9 @@ mod tests {
         let p = Pricing::bundled()
             .with_override_json(json, "prices.json")
             .unwrap();
-        assert!(p.ensure_priced(CostBasis::Metered, false, "house-model").is_ok());
+        assert!(p
+            .ensure_priced(CostBasis::Metered, false, "house-model")
+            .is_ok());
         let usage = TokenUsage {
             input_tokens: 100,
             output_tokens: 50,
@@ -983,14 +999,18 @@ mod tests {
         let cost = p.cost_of_call(CostBasis::Metered, "gpt-4o", &usage);
         assert_eq!(cost.usd, Some(0.0021));
         assert_eq!(cost.price_table, PROVIDER_REPORTED);
-        assert!(p.ensure_priced(CostBasis::Metered, true, "unlisted").is_ok());
+        assert!(p
+            .ensure_priced(CostBasis::Metered, true, "unlisted")
+            .is_ok());
     }
 
     #[test]
     fn reasoning_tokens_fall_back_to_the_output_price() {
         let json = r#"[{"modelName":"r","matchPattern":"^r$","pricingTiers":[{"name":"S",
             "isDefault":true,"priority":0,"conditions":[],"prices":{"input":1e-6,"output":3e-6}}]}]"#;
-        let p = Pricing::bundled().with_override_json(json, "o.json").unwrap();
+        let p = Pricing::bundled()
+            .with_override_json(json, "o.json")
+            .unwrap();
         let usage = TokenUsage {
             input_tokens: 0,
             output_tokens: 100,

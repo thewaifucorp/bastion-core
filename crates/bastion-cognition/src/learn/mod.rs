@@ -1035,7 +1035,10 @@ mod tests {
     async fn llm_generator_unpriced_metered_model_fails_closed() {
         let calls = Arc::new(AtomicUsize::new(0));
         let gen = LlmCandidateGenerator::new(metered("house-model-xyz", &calls), None, true);
-        let err = gen.generate("some new log content", 10.0).await.unwrap_err();
+        let err = gen
+            .generate("some new log content", 10.0)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("house-model-xyz"), "{err}");
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
@@ -1045,7 +1048,10 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let gen = LlmCandidateGenerator::new(metered("gpt-4o", &calls), None, true);
         // 800 output tokens of gpt-4o alone cost more than $0.000001.
-        let out = gen.generate("some new log content", 0.000_001).await.unwrap();
+        let out = gen
+            .generate("some new log content", 0.000_001)
+            .await
+            .unwrap();
         assert!(out.deltas.is_empty() && out.quality.is_none());
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }

@@ -4402,7 +4402,11 @@ mod tests {
         assert_eq!(turn.llm_calls, 1);
         assert_eq!(turn.cost_usd, Some(expected));
         assert_eq!(agent.session.spent_today().await.unwrap(), expected);
-        let session_total = agent.session.session_usage(&agent.session_id).await.unwrap();
+        let session_total = agent
+            .session
+            .session_usage(&agent.session_id)
+            .await
+            .unwrap();
         assert_eq!(session_total.cost_usd, Some(expected));
         assert_eq!(session_total.input_tokens, 1_000);
     }
@@ -4417,7 +4421,10 @@ mod tests {
             crate::types::CostBasis::Metered,
         )
         .await;
-        let err = agent.run_turn_for("hello", DEFAULT_OWNER).await.unwrap_err();
+        let err = agent
+            .run_turn_for("hello", DEFAULT_OWNER)
+            .await
+            .unwrap_err();
         assert!(
             matches!(
                 err.downcast_ref::<BastionError>(),
