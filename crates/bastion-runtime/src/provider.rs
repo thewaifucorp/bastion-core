@@ -87,6 +87,24 @@ pub trait Provider: Send + Sync {
         true
     }
 
+    /// How this provider's calls are paid for (BUP-02/03). `Metered` (the
+    /// default) means every call needs a price before it may run and draws
+    /// on the money budget; `Subscription` (an operator login — Codex,
+    /// Copilot) and `Local` (a model on the operator's hardware) cost no
+    /// metered dollars, never need a price and never consume the budget.
+    /// Declared by the provider, never inferred from its name.
+    fn cost_basis(&self) -> crate::types::CostBasis {
+        crate::types::CostBasis::Metered
+    }
+
+    /// Whether every successful response carries the provider's own real
+    /// per-request cost (`TokenUsage::actual_cost_usd`, e.g. OpenRouter's
+    /// `usage.cost`). Such a provider may run a model the price table does
+    /// not list, because its reported cost is what the budget records.
+    fn reports_cost(&self) -> bool {
+        false
+    }
+
     /// Stream a completion incrementally instead of waiting for the whole
     /// response (streaming/cancellation task). `cancel` lets a caller abort
     /// the underlying upstream connection mid-stream, not just stop reading

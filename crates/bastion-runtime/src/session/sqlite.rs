@@ -226,6 +226,23 @@ impl SessionManager {
                 );
                 CREATE INDEX IF NOT EXISTS idx_blocked_turns_session
                     ON blocked_turns(session_id, created_at);
+
+                -- BUP-04: usage and dollars accumulated per session, one row
+                -- per session, fed by every model call of every turn (a
+                -- plain Respond/Act turn included). `coverage_rank` is the
+                -- least certain fidelity seen so far (0 unknown, 1
+                -- estimated, 2 reported).
+                CREATE TABLE IF NOT EXISTS session_usage (
+                    session_id         TEXT    PRIMARY KEY,
+                    llm_calls          INTEGER NOT NULL DEFAULT 0,
+                    input_tokens       INTEGER NOT NULL DEFAULT 0,
+                    output_tokens      INTEGER NOT NULL DEFAULT 0,
+                    cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
+                    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+                    cost_usd           REAL,
+                    coverage_rank      INTEGER NOT NULL,
+                    updated_at         INTEGER NOT NULL
+                );
             ",
             )?;
             // Additive migration for pre-existing single-user DBs (idempotent —
@@ -599,6 +616,105 @@ impl SessionManager {
         .await?
     }
 
+    /// Dollars recorded against today's budget so far (`0.0` when nothing
+    /// was spent) — the same figure [`SessionManager::check_budget`] compares.
+    pub async fn spent_today(&self) -> anyhow::Result<f64> {
+        let path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = open_conn(&path)?;
+            let total = conn
+                .query_row(
+                    "SELECT total_usd FROM budget WHERE date = ?1",
+                    rusqlite::params![today_utc()],
+                    |row| row.get::<_, f64>(0),
+                )
+                .or_else(|e| match e {
+                    rusqlite::Error::QueryReturnedNoRows => Ok(0.0),
+                    other => Err(other),
+                })?;
+            Ok::<_, anyhow::Error>(total)
+        })
+        .await?
+    }
+
+    /// BUP-04: fold one call's (or one turn's) usage into `session_id`'s
+    /// running total. `cost_usd` adds when the delta carries a figure; the
+    /// stored fidelity degrades to the least certain one seen.
+    pub async fn record_session_usage(
+        &self,
+        session_id: &str,
+        delta: &crate::task::UsageAccum,
+    ) -> anyhow::Result<()> {
+        let path = self.db_path.clone();
+        let sid = session_id.to_owned();
+        let d = *delta;
+        tokio::task::spawn_blocking(move || {
+            let conn = open_conn(&path)?;
+            conn.execute(
+                "INSERT INTO session_usage(session_id, llm_calls, input_tokens, output_tokens, \
+                     cache_read_tokens, cache_write_tokens, cost_usd, coverage_rank, updated_at) \
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
+                 ON CONFLICT(session_id) DO UPDATE SET \
+                     llm_calls = llm_calls + ?2, \
+                     input_tokens = input_tokens + ?3, \
+                     output_tokens = output_tokens + ?4, \
+                     cache_read_tokens = cache_read_tokens + ?5, \
+                     cache_write_tokens = cache_write_tokens + ?6, \
+                     cost_usd = CASE WHEN ?7 IS NULL THEN cost_usd \
+                                     ELSE COALESCE(cost_usd, 0.0) + ?7 END, \
+                     coverage_rank = MIN(coverage_rank, ?8), \
+                     updated_at = ?9",
+                rusqlite::params![
+                    sid,
+                    i64::from(d.llm_calls),
+                    d.input_tokens as i64,
+                    d.output_tokens as i64,
+                    d.cache_read_tokens as i64,
+                    d.cache_write_tokens as i64,
+                    d.cost_usd,
+                    coverage_rank(d.cost_coverage),
+                    now_nanos(),
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await?
+    }
+
+    /// BUP-04: the running usage total of `session_id` (a default, empty
+    /// accumulator when the session recorded nothing).
+    pub async fn session_usage(&self, session_id: &str) -> anyhow::Result<crate::task::UsageAccum> {
+        let path = self.db_path.clone();
+        let sid = session_id.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let conn = open_conn(&path)?;
+            let row = conn.query_row(
+                "SELECT llm_calls, input_tokens, output_tokens, cache_read_tokens, \
+                        cache_write_tokens, cost_usd, coverage_rank \
+                 FROM session_usage WHERE session_id = ?1",
+                rusqlite::params![sid],
+                |row| {
+                    Ok(crate::task::UsageAccum {
+                        llm_calls: row.get::<_, i64>(0)?.max(0) as u32,
+                        input_tokens: row.get::<_, i64>(1)?.max(0) as u64,
+                        output_tokens: row.get::<_, i64>(2)?.max(0) as u64,
+                        cache_read_tokens: row.get::<_, i64>(3)?.max(0) as u64,
+                        cache_write_tokens: row.get::<_, i64>(4)?.max(0) as u64,
+                        cost_usd: row.get::<_, Option<f64>>(5)?,
+                        cost_coverage: coverage_from_rank(row.get::<_, i64>(6)?),
+                        ..Default::default()
+                    })
+                },
+            );
+            match row {
+                Ok(u) => Ok::<_, anyhow::Error>(u),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(crate::task::UsageAccum::default()),
+                Err(e) => Err(e.into()),
+            }
+        })
+        .await?
+    }
+
     /// Ciclo 2.4 (`docs/SUPPORT-MATRIX.md` §3): persists an
     /// `AgentRuntime::SessionHandle` under a caller-chosen `key`, upserting on
     /// a re-save (e.g. a re-issued handle after `resume`). `key` is the
@@ -675,6 +791,22 @@ impl SessionManager {
             Ok::<_, anyhow::Error>(())
         })
         .await?
+    }
+}
+
+fn coverage_rank(c: bastion_agent_runtime::BudgetCoverage) -> i64 {
+    match c {
+        bastion_agent_runtime::BudgetCoverage::Unknown => 0,
+        bastion_agent_runtime::BudgetCoverage::Estimated => 1,
+        bastion_agent_runtime::BudgetCoverage::Reported => 2,
+    }
+}
+
+fn coverage_from_rank(rank: i64) -> bastion_agent_runtime::BudgetCoverage {
+    match rank {
+        2 => bastion_agent_runtime::BudgetCoverage::Reported,
+        1 => bastion_agent_runtime::BudgetCoverage::Estimated,
+        _ => bastion_agent_runtime::BudgetCoverage::Unknown,
     }
 }
 
