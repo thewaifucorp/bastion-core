@@ -215,12 +215,63 @@ impl UsageAccum {
         self.output_tokens = self.output_tokens.saturating_add(output);
     }
 
+    /// Whether nothing has been recorded yet (no call, step, token, cost or
+    /// time). An empty accumulator's `Unknown` fidelity means "no data", not
+    /// "unknown cost", so merging into it adopts the other side's fidelity.
+    pub fn is_empty(&self) -> bool {
+        self.llm_calls == 0
+            && self.steps == 0
+            && self.input_tokens == 0
+            && self.output_tokens == 0
+            && self.cache_read_tokens == 0
+            && self.cache_write_tokens == 0
+            && self.cost_usd.is_none()
+            && self.wall_clock_ms == 0
+    }
+
+    /// The usage of ONE model call, priced (BUP-04). Tokens are the OTel
+    /// totals (`input_tokens` includes the cache counts, `output_tokens` the
+    /// reasoning tokens); `cost_usd` is the call's dollars (`0` for a
+    /// subscription/local call, `None` when a metered call could not be
+    /// priced), with the fidelity of where that figure came from.
+    pub fn from_call(
+        buckets: &bastion_types::UsageBuckets,
+        cost: &crate::pricing::CallCost,
+    ) -> Self {
+        UsageAccum {
+            llm_calls: 1,
+            input_tokens: buckets.input_total(),
+            output_tokens: buckets.output_total(),
+            cache_read_tokens: buckets.cache_read,
+            cache_write_tokens: buckets.cache_write,
+            cost_usd: cost.usd,
+            cost_coverage: cost.coverage(),
+            ..Default::default()
+        }
+    }
+
+    /// Tokens an external runtime/harness reported for work it ran on the
+    /// operator's own login (BUP-03): no metered dollars (`cost_usd` is `0`),
+    /// with the fidelity the runtime declares for its usage reporting.
+    pub fn from_runtime_usage(input: u64, output: u64, coverage: BudgetCoverage) -> Self {
+        UsageAccum {
+            input_tokens: input,
+            output_tokens: output,
+            cost_usd: Some(0.0),
+            cost_coverage: coverage,
+            ..Default::default()
+        }
+    }
+
     /// Sum another accumulator's counters into this one (saturating). Cost is
-    /// added only when both sides report a figure; the merged
+    /// summed over the sides that report a figure; the merged
     /// [`BudgetCoverage`] degrades to the least-certain of the two, so a
     /// single `Unknown`/`Estimated` input never lets an aggregate look more
-    /// precise than its worst source.
+    /// precise than its worst source. Merging into an EMPTY accumulator
+    /// ([`UsageAccum::is_empty`]) adopts the other side's fidelity, and
+    /// merging an empty one changes nothing.
     pub fn merge_from(&mut self, other: &UsageAccum) {
+        let was_empty = self.is_empty();
         self.llm_calls = self.llm_calls.saturating_add(other.llm_calls);
         self.steps = self.steps.saturating_add(other.steps);
         self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
@@ -237,7 +288,13 @@ impl UsageAccum {
             (Some(a), None) => Some(a),
             (None, b) => b,
         };
-        self.cost_coverage = least_certain(self.cost_coverage, other.cost_coverage);
+        self.cost_coverage = if was_empty {
+            other.cost_coverage
+        } else if other.is_empty() {
+            self.cost_coverage
+        } else {
+            least_certain(self.cost_coverage, other.cost_coverage)
+        };
     }
 }
 

@@ -547,6 +547,11 @@ impl Provider for CopilotProvider {
     fn name(&self) -> &'static str {
         "copilot"
     }
+
+    /// GitHub Copilot subscription login (BUP-03): no metered dollars.
+    fn cost_basis(&self) -> crate::types::CostBasis {
+        crate::types::CostBasis::Subscription
+    }
 }
 
 impl Drop for CopilotProvider {

@@ -522,6 +522,19 @@ impl AgentLoop {
                         input_tokens = delta.input_tokens,
                         output_tokens = delta.output_tokens,
                     );
+                    // BUP-03: a harness runs on the operator's own login —
+                    // `billing = subscription`, zero metered dollars, tokens
+                    // recorded on the turn and the session total.
+                    let (meter, scope) = self.active_meter();
+                    meter
+                        .record_runtime_usage(
+                            &scope,
+                            &handle.runtime_id,
+                            delta.input_tokens,
+                            delta.output_tokens,
+                            bastion_agent_runtime::BudgetCoverage::Reported,
+                        )
+                        .await;
                 }
                 RuntimeEvent::Warning { code, detail, .. } => {
                     tracing::warn!(

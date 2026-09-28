@@ -169,6 +169,13 @@ impl GeminiProvider {
         let usage = TokenUsage {
             input_tokens: json["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32,
             output_tokens: json["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32,
+            cache_read: json["usage"]["prompt_tokens_details"]["cached_tokens"]
+                .as_u64()
+                .unwrap_or(0) as u32,
+            reasoning_tokens: json["usage"]["completion_tokens_details"]["reasoning_tokens"]
+                .as_u64()
+                .unwrap_or(0) as u32,
+            response_model: json["model"].as_str().map(str::to_owned),
             ..Default::default()
         };
 
@@ -366,14 +373,25 @@ impl Provider for GeminiProvider {
             })
             .collect();
 
-        let usage = response
+        let mut usage = response
             .usage
             .map(|u| TokenUsage {
                 input_tokens: u.prompt_tokens,
                 output_tokens: u.completion_tokens,
+                cache_read: u
+                    .prompt_tokens_details
+                    .as_ref()
+                    .and_then(|d| d.cached_tokens)
+                    .unwrap_or(0),
+                reasoning_tokens: u
+                    .completion_tokens_details
+                    .as_ref()
+                    .and_then(|d| d.reasoning_tokens)
+                    .unwrap_or(0),
                 ..Default::default()
             })
             .unwrap_or_default();
+        usage.response_model = Some(response.model);
 
         Ok(LlmResponse {
             text,

@@ -110,18 +110,151 @@ pub struct ToolCall {
     pub extra: Option<serde_json::Value>,
 }
 
+/// Token usage of one model call, as the provider reported it.
+///
+/// `input_tokens`/`output_tokens` are the provider's own totals; how they
+/// relate to `cache_read`/`cache_write`/`reasoning_tokens` differs between
+/// providers and is declared by [`TokenUsage::convention`]. Consumers that
+/// price or aggregate usage read [`TokenUsage::buckets`], which normalizes
+/// both conventions into disjoint counts so nothing is counted twice.
 #[derive(Debug, Clone, Default)]
 pub struct TokenUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
+    /// Input tokens served from the provider's prompt cache.
     pub cache_read: u32,
+    /// Input tokens written to the provider's prompt cache.
     pub cache_write: u32,
+    /// Reasoning ("thinking") output tokens, when the provider reports them
+    /// separately (OpenAI `completion_tokens_details.reasoning_tokens`,
+    /// Responses API `output_tokens_details.reasoning_tokens`). `0` when it
+    /// does not — those tokens are then simply part of `output_tokens`.
+    pub reasoning_tokens: u32,
+    /// How `input_tokens`/`output_tokens` relate to the cache and reasoning
+    /// counts above.
+    pub convention: UsageConvention,
+    /// The model that actually served the call, as the response names it
+    /// (e.g. `gpt-4o-2024-08-06` for a request for `gpt-4o`). `None` when the
+    /// provider does not say; pricing then falls back to the requested model.
+    pub response_model: Option<String>,
     /// Real, provider-reported per-request cost in USD, when the provider's own API
     /// exposes one (e.g. OpenRouter's `usage.cost`). `None` when the provider never
-    /// reports a cost field (Anthropic/OpenAI/Groq/Gemini/Ollama) — `estimate_cost_usd`
-    /// (`src/agent/loop_.rs`) falls back to a hardcoded per-provider table in that case
-    /// (SEC-02). Never (de)serialized — no `#[serde]` attribute needed.
+    /// reports a cost field (Anthropic/OpenAI/Groq/Gemini/Ollama) — the kernel then
+    /// prices the call from the model price table (`bastion_runtime::pricing`).
+    /// A reported cost always wins over the table. Never (de)serialized.
     pub actual_cost_usd: Option<f64>,
+}
+
+/// How a provider's `input_tokens`/`output_tokens` totals relate to its
+/// cache and reasoning counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum UsageConvention {
+    /// OpenAI-style (OpenAI, OpenRouter, Groq, Gemini's OpenAI-compatible
+    /// endpoint, the Responses API): `input_tokens` INCLUDES `cache_read` and
+    /// `cache_write`, and `output_tokens` INCLUDES `reasoning_tokens`.
+    #[default]
+    Inclusive,
+    /// Anthropic-style (Messages API, Bedrock, Vertex): `input_tokens`
+    /// EXCLUDES `cache_read`/`cache_write`, and `output_tokens` excludes any
+    /// separately reported `reasoning_tokens`.
+    Disjoint,
+}
+
+/// Disjoint token buckets of one call — every token is counted in exactly
+/// one bucket, whatever [`UsageConvention`] the provider used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct UsageBuckets {
+    /// Uncached input tokens.
+    pub input: u64,
+    /// Non-reasoning output tokens.
+    pub output: u64,
+    /// Input tokens served from the provider's cache.
+    pub cache_read: u64,
+    /// Input tokens written to the provider's cache.
+    pub cache_write: u64,
+    /// Reasoning output tokens.
+    pub reasoning: u64,
+}
+
+impl UsageBuckets {
+    /// Every input-side token (uncached + cache read + cache write) — the
+    /// OTel GenAI `gen_ai.usage.input_tokens` total.
+    pub fn input_total(&self) -> u64 {
+        self.input
+            .saturating_add(self.cache_read)
+            .saturating_add(self.cache_write)
+    }
+
+    /// Every output-side token (visible + reasoning) — the OTel GenAI
+    /// `gen_ai.usage.output_tokens` total.
+    pub fn output_total(&self) -> u64 {
+        self.output.saturating_add(self.reasoning)
+    }
+}
+
+impl TokenUsage {
+    /// Normalize this call's usage into disjoint [`UsageBuckets`].
+    ///
+    /// For [`UsageConvention::Inclusive`] the cache and reasoning counts are
+    /// subtracted from the totals (saturating: a provider reporting a cache
+    /// count above its own total cannot produce a negative bucket).
+    pub fn buckets(&self) -> UsageBuckets {
+        let cache_read = u64::from(self.cache_read);
+        let cache_write = u64::from(self.cache_write);
+        let reasoning = u64::from(self.reasoning_tokens);
+        let (input, output) = match self.convention {
+            UsageConvention::Inclusive => (
+                u64::from(self.input_tokens).saturating_sub(cache_read + cache_write),
+                u64::from(self.output_tokens).saturating_sub(reasoning),
+            ),
+            UsageConvention::Disjoint => {
+                (u64::from(self.input_tokens), u64::from(self.output_tokens))
+            }
+        };
+        UsageBuckets {
+            input,
+            output,
+            cache_read,
+            cache_write,
+            reasoning,
+        }
+    }
+}
+
+/// How a model call is paid for — the `cost.billing` telemetry value.
+///
+/// Declared by the provider (`Provider::cost_basis` in `bastion-runtime`),
+/// never inferred from a name: a subscription login or a local model costs
+/// no metered dollars, so it never draws on a money budget, while a metered
+/// call must be priced before it is allowed to run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CostBasis {
+    /// Paid per token (an API key against a metered endpoint).
+    #[default]
+    Metered,
+    /// Covered by a subscription the operator logged into (Codex/ChatGPT,
+    /// Copilot, a harness running on its own login). Zero marginal dollars.
+    Subscription,
+    /// Served by a model running on the operator's own hardware.
+    Local,
+}
+
+impl CostBasis {
+    /// The telemetry value: `metered` | `subscription` | `local`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CostBasis::Metered => "metered",
+            CostBasis::Subscription => "subscription",
+            CostBasis::Local => "local",
+        }
+    }
+
+    /// Whether a call on this basis costs metered dollars (and therefore
+    /// needs a price and draws on the money budget).
+    pub fn is_metered(self) -> bool {
+        matches!(self, CostBasis::Metered)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -625,6 +758,21 @@ pub enum BastionError {
     ToolLoopCap,
     #[error("Budget exceeded: daily cap reached")]
     BudgetExceeded,
+    /// BUP-02 (fail closed, SEC-02 precedent): a metered call was about to
+    /// run for a model the price table (and any operator override) has no
+    /// price for. Raised BEFORE the call — a call Bastion cannot price never
+    /// runs and never adds a silent `0` to a money budget. `hint` says where
+    /// the override lives (or that none is configured) so the message is
+    /// actionable on its own.
+    #[error(
+        "no price for model '{model}' in price table {table}: add an entry for it to the \
+         pricing override file ({hint}) or use a local/subscription provider"
+    )]
+    PriceUnknown {
+        model: String,
+        table: String,
+        hint: String,
+    },
     #[error("Orphaned tool result — no preceding assistant tool_use")]
     OrphanedToolResult,
     #[error("Privacy egress blocked: local-only context bound for non-Ollama provider")]
@@ -716,6 +864,70 @@ pub fn strip_think(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inclusive_usage_subtracts_cache_and_reasoning() {
+        // OpenAI: prompt_tokens=1000 of which 400 cached; completion=300 of
+        // which 120 reasoning.
+        let usage = TokenUsage {
+            input_tokens: 1000,
+            output_tokens: 300,
+            cache_read: 400,
+            reasoning_tokens: 120,
+            ..Default::default()
+        };
+        let b = usage.buckets();
+        assert_eq!(
+            b,
+            UsageBuckets {
+                input: 600,
+                output: 180,
+                cache_read: 400,
+                cache_write: 0,
+                reasoning: 120,
+            }
+        );
+        assert_eq!(b.input_total(), 1000);
+        assert_eq!(b.output_total(), 300);
+    }
+
+    #[test]
+    fn disjoint_usage_is_taken_as_is() {
+        // Anthropic: input_tokens already excludes cache read/creation.
+        let usage = TokenUsage {
+            input_tokens: 50,
+            output_tokens: 20,
+            cache_read: 1000,
+            cache_write: 200,
+            convention: UsageConvention::Disjoint,
+            ..Default::default()
+        };
+        let b = usage.buckets();
+        assert_eq!(
+            (b.input, b.cache_read, b.cache_write, b.output),
+            (50, 1000, 200, 20)
+        );
+        assert_eq!(b.input_total(), 1250);
+    }
+
+    #[test]
+    fn inclusive_usage_never_goes_negative() {
+        let usage = TokenUsage {
+            input_tokens: 10,
+            cache_read: 50,
+            ..Default::default()
+        };
+        assert_eq!(usage.buckets().input, 0);
+    }
+
+    #[test]
+    fn cost_basis_telemetry_values() {
+        assert_eq!(CostBasis::Metered.as_str(), "metered");
+        assert_eq!(CostBasis::Subscription.as_str(), "subscription");
+        assert_eq!(CostBasis::Local.as_str(), "local");
+        assert!(CostBasis::Metered.is_metered());
+        assert!(!CostBasis::Local.is_metered());
+    }
 
     #[test]
     fn strip_think_basic() {

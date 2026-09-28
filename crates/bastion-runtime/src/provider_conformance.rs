@@ -556,6 +556,7 @@ mod tests {
                     cache_read: 0,
                     cache_write: 0,
                     actual_cost_usd: None,
+                    ..Default::default()
                 },
                 fail: false,
                 stream_chunks: None,
@@ -775,6 +776,7 @@ mod tests {
                 cache_read: 0,
                 cache_write: 0,
                 actual_cost_usd: None,
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -896,6 +898,7 @@ mod tests {
                     cache_read: 0,
                     cache_write: 0,
                     actual_cost_usd: None,
+                    ..Default::default()
                 }),
             ]),
             ..Default::default()

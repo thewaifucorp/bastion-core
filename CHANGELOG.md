@@ -7,6 +7,71 @@ version).
 
 ## Unreleased
 
+### Model pricing and metering (BUP-01..06) — pending release
+
+Breaking: `bastion-types` (`TokenUsage` gained public fields) needs a minor
+bump (0.3.0 → 0.4.0), and with it `bastion-runtime` (0.4.2 → 0.5.0, re-exports
+the type; metered calls now fail closed). `bastion-providers`,
+`bastion-cognition` change behavior without breaking their API.
+
+#### Added
+
+- **`bastion_runtime::pricing`.** The packaged Langfuse model price table
+  (`crates/bastion-runtime/pricing/`, vendored unmodified with its MIT notice
+  and upstream commit), an operator override in the same format
+  (`Pricing::with_override_file`), tier/condition resolution matching
+  Langfuse's matcher, and `Pricing::cost_of_call`/`ensure_priced`/
+  `estimate_ceiling`. No price constants in code.
+- **`CostMeter`, `MeterScope`, `MeteredProvider`.** One place that admits,
+  traces, prices and charges a model call. Each call gets a `chat {model}`
+  span with `gen_ai.usage.*` (input/output as OTel totals,
+  `cache_read.input_tokens`, `cache_creation.input_tokens`,
+  `reasoning.output_tokens`), `gen_ai.response.model`, and `<ns>.cost.usd`,
+  `<ns>.cost.price_table`, `<ns>.cost.billing` (`metered|subscription|local`),
+  `<ns>.owner`. The namespace defaults to `bastion`
+  (`Pricing::with_attribute_namespace`). The span dollars and the budget
+  dollars are the same number.
+- `TokenUsage::{reasoning_tokens, convention, response_model}`,
+  `UsageConvention`, `UsageBuckets`, `TokenUsage::buckets()`, `CostBasis`,
+  `BastionError::PriceUnknown`.
+- `Provider::cost_basis()` (default `Metered`; Ollama `Local`, Codex and
+  Copilot `Subscription`) and `Provider::reports_cost()` (OpenRouter).
+- `AgentLoop::with_pricing`, `AgentLoop::last_turn_usage`;
+  `SessionManager::{record_session_usage, session_usage, spent_today}` and a
+  `session_usage` table.
+- `UsageAccum::{from_call, from_runtime_usage, is_empty}`.
+- `LlmCandidateGenerator::with_pricing`: the Reflector's `budget_usd` is
+  checked against the model's price before the call.
+- `scripts/update-model-prices.sh` and the weekly `model-prices` workflow,
+  which refreshes the table through a pull request.
+
+#### Changed
+
+- **Every model call of a turn is metered** — persona routing and dispatch,
+  Cabinet, the tool loop, the fallback ladder and compaction; before, only
+  tool-loop rounds after the first were charged, so a plain Respond/Act turn
+  cost nothing in the budget.
+- **Fail closed (BUP-02).** A metered call to a model with no price is
+  refused before it runs (`PriceUnknown`, naming the model and the override);
+  it no longer adds `0`. A fallback model is checked the same way before the
+  switch. Subscription and local calls never need a price and never consume
+  `daily_budget_usd`.
+- `estimate_cost_usd`'s per-provider rates are gone; the table prices by
+  model, cache and reasoning tokens included.
+- `gen_ai.usage.input_tokens` is now the OTel total for every provider
+  (Anthropic's used to exclude cache reads/writes). The old
+  `gen_ai.usage.cache_read_tokens`/`cache_write_tokens` keys are still
+  emitted for one release.
+- Providers report `response_model`, reasoning tokens (OpenAI, OpenRouter,
+  Groq, Gemini, Codex) and Gemini cached tokens; Anthropic declares
+  `UsageConvention::Disjoint`.
+- Runtime-backed turns and delegated tasks record the harness's tokens as
+  `subscription` usage (zero dollars) on a span and the session total.
+- `UsageAccum::merge_from` adopts the other side's fidelity when merging into
+  an empty accumulator.
+
+### Earlier in this cycle
+
 Repo tag `v0.7.0`. `bastion-sandbox` 0.1.0 → 0.2.0 (`Backend` gained a
 variant and is now `#[non_exhaustive]`) sets the minor bump on the tag; the
 rest is additive — `bastion-mesh` 0.1.0 → 0.1.1 (the `devices` module),

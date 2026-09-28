@@ -28,6 +28,7 @@ use lib.rs:CatalogError
 enum lib.rs:ContentPart
 use lib.rs:ContextRevision
 enum lib.rs:ConveneReason
+enum lib.rs:CostBasis
 use lib.rs:CredentialKind
 enum lib.rs:DenyScope
 use lib.rs:DeploymentContext
@@ -74,12 +75,19 @@ use lib.rs:SupportStatus
 struct lib.rs:TokenUsage
 struct lib.rs:ToolCall
 enum lib.rs:ToolChoice
+struct lib.rs:UsageBuckets
+enum lib.rs:UsageConvention
 use lib.rs:UsageSource
 use lib.rs:VersionedContextArtifact
+fn lib.rs:as_str
+fn lib.rs:buckets
 fn lib.rs:confidence
 mod lib.rs:context_artifact
 mod lib.rs:deployment
 fn lib.rs:from_sql_str
+fn lib.rs:input_total
+fn lib.rs:is_metered
+fn lib.rs:output_total
 mod lib.rs:provider_auth
 mod lib.rs:provider_catalog
 mod lib.rs:secret
