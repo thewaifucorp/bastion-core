@@ -73,6 +73,17 @@ An external `AgentRuntime` is a different execution mode: the external harness o
 | `TurnContextProvider` | `crates/bastion-runtime/src/agent/context.rs` | Opaque host context injection |
 | `AgentRuntime` | `crates/bastion-agent-runtime/src/lib.rs` | External agent-harness contract |
 | `SecretResolver` | `crates/bastion-types/src/secret.rs` | Resolution of opaque secret references at a boundary |
+| `Pricing` / `CostMeter` | `crates/bastion-runtime/src/pricing/` | Model prices and per-call metering (admission, span, budget) |
+
+## Model pricing and metering
+
+Money budgets (`daily_budget_usd`, a task's `max_cost_usd`, the Reflector's `budget_usd`) are checked before a model is called, so the kernel prices calls itself, offline.
+
+- **Table.** `crates/bastion-runtime/pricing/langfuse-model-prices.json` is an unmodified copy of Langfuse's `default-model-prices.json` (MIT; `LICENSE-langfuse` beside it, upstream commit and version string in `upstream.json`). It is embedded with `include_str!` and parsed once. `scripts/update-model-prices.sh`, run weekly by the `model-prices` workflow, refreshes it through a pull request; nothing is downloaded at run time. No price lives in Rust code.
+- **Override.** A host passes an operator file in the same format (`Pricing::with_override_file`); its entries match before the packaged table and are reported as `<version>+override`.
+- **Resolution.** The model actually used (the response's model, else the requested one) is matched against `matchPattern`; non-default tiers are tried by ascending priority (all conditions must hold; an unknown input makes a condition false), else the default tier. Usage is normalized into disjoint buckets (`TokenUsage::buckets`: OpenAI-style totals include cache and reasoning tokens, Anthropic-style do not) and each bucket is priced by the first key present, cache and reasoning falling back to the input and output price. A provider-reported cost (`TokenUsage::actual_cost_usd`) wins over the table.
+- **Cost basis.** A provider declares `Provider::cost_basis`: `Metered` (default), `Subscription` (Codex, Copilot) or `Local` (Ollama). Only metered calls need a price and draw on the money budget.
+- **Admission and metering.** Every model call of a turn goes through one `CostMeter`: before the call, a metered model with no price fails closed with `BastionError::PriceUnknown` and a spent daily budget with `BudgetExceeded`; after it, one `chat {model}` span carries the GenAI usage attributes and `<ns>.cost.usd`, `<ns>.cost.price_table`, `<ns>.cost.billing`, `<ns>.owner` (namespace `bastion` unless the host sets one), and the same dollar figure is added to the daily budget, the session total (`SessionManager::session_usage`) and the turn total (`AgentLoop::last_turn_usage`). The Responder only ever sees a `MeteredProvider`, so routing, persona dispatch, Cabinet and compaction calls are metered too. Runtime-backed turns and delegated tasks record the harness's tokens as `subscription` with zero dollars.
 
 ## Core and product boundary
 
