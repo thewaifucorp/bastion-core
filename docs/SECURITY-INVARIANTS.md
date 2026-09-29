@@ -54,8 +54,10 @@ The product is responsible for mapping an external sender to a canonical owner b
 
 An `AgentRuntime` descriptor distinguishes bridged policy from harness-owned policy. Callers must inspect `PolicyCoverage`; they must not present an external harness as equivalent to the native Core loop.
 
-- **Code:** `crates/bastion-agent-runtime/src/lib.rs`, `crates/bastion-agent-runtime/src/codex.rs`, and `crates/bastion-agent-runtime/src/acpx.rs`
-- **Evidence:** adapter unit tests, conformance helpers, and the explicitly ignored live suites documented in [SUPPORT-MATRIX.md](SUPPORT-MATRIX.md).
+A runtime that runs on a user's subscription never handles the credential: the `claude` adapter starts the installed, unmodified `claude` binary, which authenticates with its own login; the adapter withholds every Anthropic credential and endpoint variable from it, never reads its credential store, and reports a `Warning` when the binary says it authenticated any other way.
+
+- **Code:** `crates/bastion-agent-runtime/src/lib.rs`, `crates/bastion-agent-runtime/src/codex.rs`, `crates/bastion-agent-runtime/src/acpx.rs`, and `crates/bastion-agent-runtime/src/claude_code.rs` (`is_withheld_env`, `init_warnings`)
+- **Evidence:** adapter unit tests, conformance helpers, `tests/claude_code_fake.rs` (`the_binary_gets_no_credential_and_a_governed_command_line`), and the explicitly ignored live suites documented in [SUPPORT-MATRIX.md](SUPPORT-MATRIX.md).
 
 ## 8. Business state remains host-owned
 

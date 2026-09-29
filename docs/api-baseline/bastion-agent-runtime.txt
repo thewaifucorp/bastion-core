@@ -5,6 +5,13 @@ struct acpx.rs:AcpxAgentRuntime
 fn acpx.rs:new
 fn acpx.rs:with_auth_policy
 fn acpx.rs:with_confinement
+const claude_code.rs:CLAUDE_VERSION_REQ
+struct claude_code.rs:ClaudeCodeRuntime
+const claude_code.rs:RUNTIME_ID
+fn claude_code.rs:is_withheld_env
+fn claude_code.rs:new
+fn claude_code.rs:with_binary
+fn claude_code.rs:with_confinement
 struct codex.rs:CodexAppServerRuntime
 fn codex.rs:new
 fn codex.rs:with_binary
@@ -86,6 +93,7 @@ enum lib.rs:WarnCode
 struct lib.rs:WorkspacePolicy
 mod lib.rs:acp
 mod lib.rs:acpx
+mod lib.rs:claude_code
 mod lib.rs:codex
 mod lib.rs:confine
 mod lib.rs:conformance

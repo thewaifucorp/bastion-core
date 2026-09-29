@@ -797,6 +797,7 @@ impl AgentLoop {
             timeout,
             permissions,
             env,
+            mcp_bridge: self.runtime_mcp_bridge_for(owner),
         };
         let mut session = runtime
             .resume(&handle, resume_spec)

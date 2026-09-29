@@ -376,6 +376,7 @@ impl AgentLoop {
                     timeout,
                     permissions,
                     env,
+                    mcp_bridge: self.runtime_mcp_bridge_for(owner),
                 };
                 match runtime.resume(&handle, resume_spec).await {
                     Ok(s) => s,

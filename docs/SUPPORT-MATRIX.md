@@ -7,17 +7,19 @@
 | Runtime | Transport | Resume | Steer | Usage | Diff events | Permission bridge | Concurrent sessions |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `codex_app_server` | Codex app-server | Yes | Yes | Yes | Yes | Yes | No |
+| `claude` | `claude` binary, stream-json | Yes | No | Yes | Yes | Yes | No |
 | `acpx_claude` | ACP through `acpx` | No | No | Yes | Yes | No | Yes |
 | `acpx_opencode` | ACP through `acpx` | No | No | Yes | Yes | No | Yes |
 | `acp_claude` (and other `acp_*`) | ACP, Bastion is the client | No | No | Yes | Yes | Yes | No |
 
-These values come from `RuntimeDescriptor` in `crates/bastion-agent-runtime/src/codex.rs`, `acpx.rs` and `acp.rs`. The `acp_*` id follows the bridge command (`claude-agent-acp` → `acp_claude`, `codex-acp` → `acp_codex`, `opencode acp` → `acp_opencode`).
+These values come from `RuntimeDescriptor` in `crates/bastion-agent-runtime/src/codex.rs`, `claude_code.rs`, `acpx.rs` and `acp.rs`. The `acp_*` id follows the bridge command (`claude-agent-acp` → `acp_claude`, `codex-acp` → `acp_codex`, `opencode acp` → `acp_opencode`).
 
 ## Policy coverage
 
 | Runtime | Tool visibility | Approval | Egress | Budget | Sandbox |
 | --- | --- | --- | --- | --- | --- |
 | `codex_app_server` | Declared tools only | Bridged | Harness-owned | Reported | `Partial` only after a successful live bubblewrap probe; otherwise `None` |
+| `claude` | Declared tools only | Bridged | Harness-owned | Reported | `Partial` when the host confines it, otherwise None |
 | `acpx_claude` | Declared tools only | Harness-owned | Harness-owned | Reported | None |
 | `acpx_opencode` | Declared tools only | Harness-owned | Harness-owned | Reported | None |
 | `acp_claude` | Declared tools only | Bridged | Harness-owned | Reported | `Partial` when the host confines it, otherwise None |
@@ -41,6 +43,8 @@ cargo test -p bastion-agent-runtime --test acpx_live_opencode -- --ignored --noc
 cargo test -p bastion-agent-runtime --test codex_live -- --ignored --nocapture
 ```
 
+The `claude` adapter's offline suite (`tests/claude_code_fake.rs`) runs the full conformance suite and the permission, environment, MCP and resume checks against a scripted `claude` (`tests/fixtures/fake_claude.py`) on every `cargo test`. The protocol it scripts was measured against Claude Code 2.1.284 on a subscription login.
+
 The files themselves record prerequisites, scenarios, and known gaps. Results are environment- and version-specific; rerun them before making a release claim.
 
 ## Choosing an execution mode
@@ -48,7 +52,8 @@ The files themselves record prerequisites, scenarios, and known gaps. Results ar
 - Use the native `Provider`/`AgentLoop` path when Core must mediate its own tool loop and egress decisions.
 - Use `codex_app_server` when a real Codex approval bridge and resume/steer support are required, while accepting harness-owned egress.
 - Use ACP through `acpx` when the wrapped CLI is the desired executor and concurrent sessions matter, while accepting that approval, egress, and sandbox remain outside Core.
-- Use `acp_claude` when Claude Code (under the operator's own login) should run the turn and every edit it asks to make must be approved in Bastion, with the diff shown.
+- Use `claude` when Claude Code should run the turn on the user's Claude subscription (Pro/Max): it drives the installed, unmodified `claude` binary under the user's own login, and every edit or command it asks to run is approved in Bastion, with the diff shown. This is the only supported way to use a Claude subscription; Claude as a native-loop `Provider` goes through an API key, Bedrock or Vertex.
+- `acp_claude` reaches Claude Code through `claude-agent-acp`, an Agent SDK application that by default starts the SDK's own bundled Claude Code. It stays available for API-key setups; it is not a subscription path.
 
 ## Runtime-backed conversation (mode 2)
 
@@ -56,6 +61,8 @@ The files themselves record prerequisites, scenarios, and known gaps. Results ar
 
 An `acp_claude` session does not load the operator's Claude Code settings, hooks, plugins, skills or account MCP servers (`settingSources: []`, `strictMcpConfig`), runs with auto memory off, and is switched to the `default` (asking) permission mode — otherwise an operator's `allow` rule or `defaultMode` would answer requests before Bastion sees them. Only the MCP servers Bastion bridged are pre-allowed.
 
-`SessionSpec::mcp_bridge` hands a session concrete MCP endpoints (`McpServerEndpoint::Http` or `Stdio`); the host supplies them per owner with `AgentLoop::with_runtime_mcp_bridge`. `acp_*` passes them to the agent as ACP `mcpServers`; `acpx` and `codex_app_server` cannot, and say so with a `Warning` event.
+A `claude` session is the same governed shape without any intermediary. The adapter starts `claude -p --input-format stream-json --output-format stream-json --permission-prompt-tool stdio --permission-mode default --setting-sources "" --strict-mcp-config`: Claude Code asks Bastion (`control_request` `can_use_tool`, carrying the full tool input, from which the proposed edits are built) before any guarded tool runs, and `respond_permission` answers it (`deny` with `interrupt` for a turn-scoped denial, which ends the task `Cancelled` and keeps the process for the next message). Every `ANTHROPIC_*` variable and every other Claude credential or provider switch is removed from the environment, so the binary authenticates only with its own login; Bastion never reads `~/.claude`. The `system/init` frame is checked, and a permission mode or credential source other than the ones asked for is reported as a `Warning`. The bridged MCP servers go in a `0600` file inside the workspace (never on the command line) that is removed with the session. The Claude Code conversation is the child of the Bastion session: it is created with `--session-id`, its id and working directory are the persisted `SessionHandle`, and a restart reattaches it with `--resume` — or gets `NotResumable` when Claude Code no longer has it. Usage is reported from each `result` frame (cache reads and writes counted as input).
+
+`SessionSpec::mcp_bridge` hands a session concrete MCP endpoints (`McpServerEndpoint::Http` or `Stdio`); the host supplies them per owner with `AgentLoop::with_runtime_mcp_bridge`. `acp_*` passes them to the agent as ACP `mcpServers` and `claude` as `--mcp-config`; `acpx` and `codex_app_server` cannot, and say so with a `Warning` event. `ResumeSpec::mcp_bridge` carries the same servers to a reattached session, so a restart does not cut the harness off from Bastion.
 
 The embedding host owns backend selection and authentication-profile configuration. This library repository does not define a `bastion.toml` schema or `/backend` command.
