@@ -54,6 +54,11 @@ const BUNDLED_UPSTREAM: &str = include_str!("../../pricing/upstream.json");
 /// reported (e.g. OpenRouter's `usage.cost`) — no table was consulted.
 pub const PROVIDER_REPORTED: &str = "provider-reported";
 
+/// `price_table` value for a call priced and recorded by an upstream
+/// gateway ([`CostBasis::Upstream`]) — no table was consulted, and the value
+/// is never written to telemetry.
+pub const UPSTREAM: &str = "upstream";
+
 /// Suffix appended to the table version when an override entry priced the call.
 const OVERRIDE_SUFFIX: &str = "+override";
 
@@ -453,6 +458,9 @@ pub enum CostSource {
     NotMetered,
     /// Metered, but nothing could price it.
     Unknown,
+    /// Priced and recorded by an upstream gateway ([`CostBasis::Upstream`]):
+    /// the dollars are not known here, by design.
+    Upstream,
 }
 
 /// The cost of one model call, as recorded on its span and in the budget —
@@ -460,9 +468,11 @@ pub enum CostSource {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CallCost {
     pub basis: CostBasis,
-    /// Dollars; `None` only for a metered call nothing could price.
+    /// Dollars; `None` for a metered call nothing could price and for an
+    /// upstream-measured call.
     pub usd: Option<f64>,
-    /// `langfuse@<commit>`, `…+override`, or [`PROVIDER_REPORTED`].
+    /// `langfuse@<commit>`, `…+override`, [`PROVIDER_REPORTED`] or
+    /// [`UPSTREAM`].
     pub price_table: String,
     pub source: CostSource,
 }
@@ -470,13 +480,14 @@ pub struct CallCost {
 impl CallCost {
     /// Fidelity of `usd` as a task/turn usage figure: a provider-reported
     /// cost and a not-metered `0` are exact (`Reported`), a table price is
-    /// `Estimated`, an unpriced call is `Unknown`.
+    /// `Estimated`, an unpriced call and an upstream-measured call (whose
+    /// dollars live in the gateway) are `Unknown`.
     pub fn coverage(&self) -> bastion_agent_runtime::BudgetCoverage {
         use bastion_agent_runtime::BudgetCoverage;
         match self.source {
             CostSource::ProviderReported | CostSource::NotMetered => BudgetCoverage::Reported,
             CostSource::Table => BudgetCoverage::Estimated,
-            CostSource::Unknown => BudgetCoverage::Unknown,
+            CostSource::Unknown | CostSource::Upstream => BudgetCoverage::Unknown,
         }
     }
 }
@@ -642,15 +653,25 @@ impl Pricing {
         })
     }
 
-    /// The cost of a finished call. A provider-reported cost wins; a
-    /// subscription or local call costs `0`; otherwise the table prices the
-    /// response model, falling back to `requested_model`.
+    /// The cost of a finished call. An upstream-measured call has no local
+    /// figure (not even one the provider passed back: the gateway owns it);
+    /// a subscription or local call costs `0`; a provider-reported cost
+    /// wins over the table; otherwise the table prices the response model,
+    /// falling back to `requested_model`.
     pub fn cost_of_call(
         &self,
         basis: CostBasis,
         requested_model: &str,
         usage: &TokenUsage,
     ) -> CallCost {
+        if basis == CostBasis::Upstream {
+            return CallCost {
+                basis,
+                usd: None,
+                price_table: UPSTREAM.to_owned(),
+                source: CostSource::Upstream,
+            };
+        }
         if !basis.is_metered() {
             return CallCost {
                 basis,
@@ -985,6 +1006,31 @@ mod tests {
             assert_eq!(cost.usd, Some(0.0));
             assert_eq!(cost.source, CostSource::NotMetered);
         }
+    }
+
+    #[test]
+    fn upstream_calls_are_admitted_unpriced_and_carry_no_dollars() {
+        let p = Pricing::bundled();
+        assert!(p
+            .ensure_priced(CostBasis::Upstream, false, "no-such-model-xyz")
+            .is_ok());
+        // Even a figure the provider passed back is not this meter's to
+        // record: the upstream gateway owns the call's dollars.
+        let usage = TokenUsage {
+            input_tokens: 1_000,
+            output_tokens: 1_000,
+            actual_cost_usd: Some(0.5),
+            ..Default::default()
+        };
+        let cost = p.cost_of_call(CostBasis::Upstream, "no-such-model-xyz", &usage);
+        assert_eq!(cost.basis, CostBasis::Upstream);
+        assert_eq!(cost.usd, None);
+        assert_eq!(cost.source, CostSource::Upstream);
+        assert_eq!(cost.price_table, UPSTREAM);
+        assert_eq!(
+            cost.coverage(),
+            bastion_agent_runtime::BudgetCoverage::Unknown
+        );
     }
 
     #[test]

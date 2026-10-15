@@ -4645,4 +4645,29 @@ mod tests {
         assert_eq!(turn.cost_usd, Some(0.0));
         assert_eq!(turn.input_tokens, 1_000);
     }
+
+    /// A call metered upstream (a gateway that prices and records it)
+    /// runs on a model no table lists, never draws on the local budget and
+    /// leaves the turn's dollars unknown here; its tokens are still recorded.
+    #[tokio::test]
+    async fn upstream_turn_runs_unpriced_and_adds_no_dollars() {
+        let db = NamedTempFile::new().unwrap();
+        let (mut agent, calls) = priced_loop(
+            db.path().to_str().unwrap(),
+            "gateway-routed-model",
+            crate::types::CostBasis::Upstream,
+        )
+        .await;
+        agent.run_turn_for("hello", DEFAULT_OWNER).await.unwrap();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(agent.session.spent_today().await.unwrap(), 0.0);
+        let turn = agent.last_turn_usage().unwrap();
+        assert_eq!(turn.cost_usd, None);
+        assert_eq!(
+            turn.cost_coverage,
+            bastion_agent_runtime::BudgetCoverage::Unknown
+        );
+        assert_eq!(turn.input_tokens, 1_000);
+        assert_eq!(turn.output_tokens, 500);
+    }
 }

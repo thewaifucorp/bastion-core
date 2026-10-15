@@ -7,7 +7,8 @@ version).
 
 ## Unreleased
 
-Lands after 0.8.0. `bastion-types` (`BastionError` gained a variant) and
+Lands after 0.8.0. `bastion-types` (`BastionError` and `CostBasis` gained a
+variant) and
 `bastion-runtime` (`InvokeCtx` gained public fields, so struct literals without
 `..Default::default()` break) take a minor bump on the next tag.
 
@@ -47,6 +48,15 @@ Lands after 0.8.0. `bastion-types` (`BastionError` gained a variant) and
   closed (the server is skipped); `connect_from_config` keeps its signature and
   uses `NullSecretResolver`. `McpServerEntry` struct literals need the new
   field (`bastion-types` minor bump on the next tag).
+
+- **Upstream-measured calls (`CostBasis::Upstream`, `CostSource::Upstream`,
+  `pricing::UPSTREAM`).** For a provider whose calls go through a gateway
+  that prices and records them itself. The meter admits such a call without
+  a price, consults no table, writes no `<ns>.cost.usd`/`price_table`/
+  `billing` attribute (tokens and `<ns>.owner` still go on the span), never
+  charges the local money budget and logs no "unpriced" error; the call's
+  dollars are `None` with `BudgetCoverage::Unknown`. `CostBasis` and
+  `CostSource` matches need the new arm (minor bump on the next tag).
 
 ### Changed
 
