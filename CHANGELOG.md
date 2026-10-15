@@ -35,6 +35,15 @@ Lands after 0.8.0. `bastion-types` (`BastionError` gained a variant) and
   version in force; optional host `PolicyValidator`; one revision per turn,
   reported by `AgentLoop::last_turn_policy_version` and the
   `<ns>.policy.version` span attribute.
+- **Bearer credentials for typed MCP servers (`McpServerEntry::bearer_token`,
+  `McpClient::connect_from_config_with_secrets`).** An entry names its
+  credential as a `SecretRef`; the host's `SecretResolver` resolves it once at
+  connect time and the streamable-HTTP transport sends
+  `Authorization: Bearer <token>`. The value never sits in config, in the
+  intermediate server map, or in a log line. An unresolvable reference fails
+  closed (the server is skipped); `connect_from_config` keeps its signature and
+  uses `NullSecretResolver`. `McpServerEntry` struct literals need the new
+  field (`bastion-types` minor bump on the next tag).
 
 ### Changed
 

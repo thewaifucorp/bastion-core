@@ -645,6 +645,18 @@ pub struct McpServerEntry {
     /// server as their escape hatch (D-09).
     #[serde(default)]
     pub trusted: bool,
+    /// Bearer credential for a `url`-based server, by reference only.
+    ///
+    /// Holds the secret's NAME (a [`SecretRef`]), never its value, so the
+    /// entry stays safe to log, `Debug`-print and serialize into a config
+    /// dump. The host's [`SecretResolver`] turns it into material once, at
+    /// connect time (`McpClient::connect_from_config_with_secrets`), and the
+    /// transport sends it as `Authorization: Bearer <token>`. Absent (the
+    /// default) = no `Authorization` header, today's behavior. A reference
+    /// that cannot be resolved fails closed: the server is not connected
+    /// without its credential.
+    #[serde(default)]
+    pub bearer_token: Option<SecretRef>,
 }
 
 /// Status of a queued approval row (SEC-01). Moved here from

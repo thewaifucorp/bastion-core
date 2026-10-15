@@ -8,6 +8,10 @@ use rmcp::{
 use serde_json::Value;
 use tokio::time::{timeout, Duration};
 
+/// Resolved bearer credentials by server label. `SecretValue` redacts itself in
+/// `Debug`/`Display`, so this map cannot leak material through a log line.
+type Credentials = std::collections::HashMap<String, bastion_types::SecretValue>;
+
 pub struct McpClient {
     // RunningService<RoleClient, ()> must live for daemon lifetime (Pitfall 3 in RESEARCH.md)
     // RunningService implements Deref<Target = Peer<RoleClient>>, so call list_all_tools()/call_tool() directly on it
@@ -22,18 +26,57 @@ pub struct McpClient {
 }
 
 impl McpClient {
-    /// Connect from the host application's typed MCP server configuration.
+    /// Connect from the host application's typed MCP server configuration,
+    /// with no secret resolver.
+    ///
+    /// Equivalent to [`Self::connect_from_config_with_secrets`] with
+    /// [`bastion_types::NullSecretResolver`]: a server whose entry names a
+    /// `bearer_token` is skipped (fail-closed), never connected without it.
     pub async fn connect_from_config(
         servers: &std::collections::HashMap<String, crate::types::McpServerEntry>,
     ) -> anyhow::Result<Self> {
+        Self::connect_from_config_with_secrets(servers, &bastion_types::NullSecretResolver).await
+    }
+
+    /// Connect from the host application's typed MCP server configuration,
+    /// resolving each entry's `bearer_token` reference through `secrets`.
+    ///
+    /// The reference is resolved once, here, and the material only ever
+    /// reaches the transport's `Authorization: Bearer` header — it is not
+    /// logged, not stored on the client, and not placed in the intermediate
+    /// per-server config map. An entry whose reference cannot be resolved is
+    /// skipped with a warning that names the reference, never a value: a
+    /// server that requires a credential is not contacted without one.
+    pub async fn connect_from_config_with_secrets(
+        servers: &std::collections::HashMap<String, crate::types::McpServerEntry>,
+        secrets: &dyn bastion_types::SecretResolver,
+    ) -> anyhow::Result<Self> {
         let mut obj = serde_json::Map::new();
+        let mut credentials = Credentials::new();
         for (key, entry) in servers {
             let label = if entry.label.is_empty() {
                 key.clone()
             } else {
                 entry.label.clone()
             };
-            // url-based servers (streamable-http / SSE); internal network, no auth header.
+            if let Some(reference) = &entry.bearer_token {
+                match secrets.resolve(reference.name()) {
+                    Ok(token) => {
+                        credentials.insert(label.clone(), token);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            server = %label,
+                            secret = %reference,
+                            error = %e,
+                            "MCP server bearer token could not be resolved, skipping"
+                        );
+                        continue;
+                    }
+                }
+            }
+            // url-based servers (streamable-http / SSE). The credential, when
+            // configured, travels in `credentials`, never in this JSON map.
             // is_local (Plan 10-08): threaded through so connect_from_servers_obj can pass
             // it to ToolRegistry::register_with_schema — the typed locality flag flows
             // config -> intermediate JSON -> registry, never re-derived from tool_name.
@@ -49,12 +92,13 @@ impl McpClient {
                 }),
             );
         }
-        Self::connect_from_servers_obj(&obj).await
+        Self::connect_from_servers_obj(&obj, &credentials).await
     }
 
     /// Shared connect loop over a `{ label: {url|command,...} }` map.
     async fn connect_from_servers_obj(
         mcp_servers: &serde_json::Map<String, Value>,
+        credentials: &Credentials,
     ) -> anyhow::Result<Self> {
         let mut servers: Vec<(String, RunningService<RoleClient, ()>)> = Vec::new();
         let mut registry = ToolRegistry::new();
@@ -114,10 +158,15 @@ impl McpClient {
                             continue;
                         }
                     };
-                    // Optional bearer token: literal or `${ENV_VAR}` reference. Sent as
-                    // `Authorization: Bearer <token>`.
-                    let auth_token =
-                        resolve_secret(server_cfg.get("auth_token").and_then(|v| v.as_str()));
+                    // Optional bearer token, sent as `Authorization: Bearer <token>`:
+                    // the typed entry's resolved `bearer_token` reference first, else
+                    // a JSON `auth_token` (literal or `${ENV_VAR}` reference).
+                    let auth_token = credentials
+                        .get(label)
+                        .map(|token| token.expose_secret().to_owned())
+                        .or_else(|| {
+                            resolve_secret(server_cfg.get("auth_token").and_then(|v| v.as_str()))
+                        });
                     // Optional custom headers (each value: literal or `${ENV_VAR}`). Needed by
                     // servers with non-Bearer auth, e.g. Composio's `x-consumer-api-key`.
                     let custom_headers: Vec<(String, String)> = server_cfg
