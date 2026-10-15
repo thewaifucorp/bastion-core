@@ -47,6 +47,11 @@ pub trait TurnContextProvider: Send + Sync {
     ///
     /// Retornar `Vec::new()` é válido (ex: sem identidade no primeiro uso = onboarding).
     /// Implementações devem ser rápidas (sem I/O pesado) — são chamadas em todo turn.
+    ///
+    /// The rule revision of the turn being assembled is
+    /// [`crate::policy::current_turn_policy`]; a provider that renders rules
+    /// reads it there, not from the `PolicyChannel`, so the prompt shows the
+    /// same version the turn reports.
     async fn context_for_turn(
         &self,
         owner: &str,

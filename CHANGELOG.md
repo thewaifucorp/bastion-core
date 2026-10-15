@@ -34,7 +34,10 @@ Lands after 0.8.0. `bastion-types` (`BastionError` gained a variant) and
   Patch delta over a `VersionedContextArtifact`, acknowledged with the
   version in force; optional host `PolicyValidator`; one revision per turn,
   reported by `AgentLoop::last_turn_policy_version` and the
-  `<ns>.policy.version` span attribute.
+  `<ns>.policy.version` span attribute. Context providers read the same
+  revision through `policy::current_turn_policy()` (task-local, set for the
+  whole turn), so a revision published after the turn starts never reaches
+  that turn's prompt.
 - **Bearer credentials for typed MCP servers (`McpServerEntry::bearer_token`,
   `McpClient::connect_from_config_with_secrets`).** An entry names its
   credential as a `SecretRef`; the host's `SecretResolver` resolves it once at

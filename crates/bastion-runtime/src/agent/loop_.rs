@@ -1362,15 +1362,18 @@ impl AgentLoop {
     ) -> anyhow::Result<String> {
         self.turn_host_context = request.host_context.clone();
         self.turn_policy = self.policy.effective();
-        let result = self
-            .run_turn_body(
+        let pinned = self.turn_policy.clone();
+        let result = crate::policy::with_turn_policy(
+            pinned,
+            self.run_turn_body(
                 &request.input,
                 &request.owner,
                 request.untrusted,
                 request.session_id.as_deref(),
                 owner_path_locks,
-            )
-            .await;
+            ),
+        )
+        .await;
         self.turn_host_context = None;
         self.last_turn_policy_version = self.turn_policy.take().map(|r| r.version);
         result
