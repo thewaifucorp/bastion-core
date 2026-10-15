@@ -8,6 +8,10 @@ unsafe_code = "forbid"
 
 [lints.clippy]
 all = "warn"
+# async_trait marks every boxed-future trait method `#[must_use]`; clippy
+# 1.99 reports that as `double_must_use` on each trait definition. The
+# attribute is generated, not written here.
+double_must_use = { level = "allow", priority = 1 }
 
 [dependencies]
 bastion-types = { path = "../bastion-types" }

@@ -60,9 +60,6 @@ pub const DEFAULT_WATCHDOG: Duration = Duration::from_secs(5);
 /// `true` asserts the fault was actually induced — the check then requires
 /// the typed, contract-compliant reaction (never a panic, never a generic
 /// error).
-// `async_trait` marks the boxed future of a provided method `#[must_use]`;
-// clippy 1.99 reports that as `double_must_use`. Generated code, not ours.
-#[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 pub trait FaultInjection: Send + Sync {
     /// Kill the harness process/connection backing the currently active

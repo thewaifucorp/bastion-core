@@ -623,9 +623,6 @@ pub enum RuntimeEvent {
 /// Factory/entry point implemented by each adapter. The kernel talks to
 /// this trait only; concrete adapters are registered by the composition
 /// layer (app or embedded host).
-// `async_trait` marks the boxed future of a provided method `#[must_use]`;
-// clippy 1.99 reports that as `double_must_use`. Generated code, not ours.
-#[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 pub trait AgentRuntime: Send + Sync {
     /// Static identity and capability card.
@@ -654,9 +651,6 @@ pub trait AgentRuntime: Send + Sync {
 
 /// One live harness session. Not `Clone`: single ownership mirrors the
 /// daemon's one-`&mut`-agent serialization model.
-// `async_trait` marks the boxed future of a provided method `#[must_use]`;
-// clippy 1.99 reports that as `double_must_use`. Generated code, not ours.
-#[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 pub trait RuntimeSession: Send {
     /// Persistable reference for restart recovery.
