@@ -74,6 +74,13 @@ Persona contract v2's `tools:` field (`bastion-personas`'s `PersonaFront`/`Perso
 - **Code:** `crates/bastion-runtime/src/capability/registry.rs` (`InvokeCtx::allowed_tools`, `check_tool_allowed`, Policy 0), `crates/bastion-runtime/src/agent/loop_.rs` (`dispatch_tool_loop`'s registry path and empty-registry bypass, `run_provider_fallback`), `crates/bastion-runtime/src/agent/ports.rs` (`RespondOutcome::allowed_tools`), `crates/bastion-personas/src/persona/responder.rs` (`resolve_allowed_tools`), `crates/bastion-personas/src/persona/soul.rs` (`PersonaFront::tools`, `validate()`).
 - **Evidence:** `invoke_denies_tool_not_in_allowed_set`, `invoke_allows_any_tool_when_allowed_tools_is_none`, `invoke_allows_tool_present_in_allowed_set`, and the `check_tool_allowed_*` unit tests in `registry.rs`; new coverage for the fallback path tracked alongside this change.
 
+## 10. Extension trust tiers are derived, never claimed
+
+A manifest cannot set its own trust tier. `TrustAnchors::verify` derives it from a signature checked against keys the host supplies: no signature or an unknown publisher resolves to `Local`; a signature that is present but does not verify is an error, never a downgrade. The signature covers the digest of every file in the manifest's directory, so a modified skill, persona or module invalidates it. The tier is informational: `PermissionSet` enforcement never reads it.
+
+- **Code:** `crates/bastion-extension-protocol/src/trust.rs`, `crates/bastion-extension-protocol/src/content.rs`
+- **Evidence:** `tampered_payload_is_rejected`, `signature_from_wrong_key_of_known_publisher_is_rejected`, `unknown_publisher_stays_local_without_rejecting`, `empty_anchors_never_elevate`, `pack_signature_is_not_valid_for_an_extension_with_same_id`, `symlinks_are_refused`.
+
 ## Scope of this document
 
 Channel authentication, HTTP authorization, daemon serialization, Docker isolation, and sender-to-owner mapping belong to the embedding product. The `bastion-agent` security documentation is authoritative for those product-level guarantees.
