@@ -229,7 +229,9 @@ impl TokenUsage {
 /// Declared by the provider (`Provider::cost_basis` in `bastion-runtime`),
 /// never inferred from a name: a subscription login or a local model costs
 /// no metered dollars, so it never draws on a money budget, while a metered
-/// call must be priced before it is allowed to run.
+/// call must be priced before it is allowed to run. An upstream-measured
+/// call is paid for, but priced and recorded by the gateway it goes
+/// through, so this process neither prices it nor reports its cost.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CostBasis {
@@ -241,20 +243,28 @@ pub enum CostBasis {
     Subscription,
     /// Served by a model running on the operator's own hardware.
     Local,
+    /// Priced and recorded by an upstream gateway the call goes through
+    /// (an LLM proxy that meters every request itself). The local meter
+    /// consults no price table, emits no cost attributes and never charges
+    /// the local money budget: the gateway is the single source of the
+    /// call's dollars, and reporting a second figure here would double it.
+    Upstream,
 }
 
 impl CostBasis {
-    /// The telemetry value: `metered` | `subscription` | `local`.
+    /// The telemetry value: `metered` | `subscription` | `local` | `upstream`.
     pub fn as_str(self) -> &'static str {
         match self {
             CostBasis::Metered => "metered",
             CostBasis::Subscription => "subscription",
             CostBasis::Local => "local",
+            CostBasis::Upstream => "upstream",
         }
     }
 
-    /// Whether a call on this basis costs metered dollars (and therefore
-    /// needs a price and draws on the money budget).
+    /// Whether a call on this basis costs metered dollars that THIS process
+    /// prices (and therefore needs a price and draws on the money budget).
+    /// `false` for [`CostBasis::Upstream`]: its dollars are the gateway's.
     pub fn is_metered(self) -> bool {
         matches!(self, CostBasis::Metered)
     }
@@ -947,6 +957,8 @@ mod tests {
         assert_eq!(CostBasis::Local.as_str(), "local");
         assert!(CostBasis::Metered.is_metered());
         assert!(!CostBasis::Local.is_metered());
+        assert_eq!(CostBasis::Upstream.as_str(), "upstream");
+        assert!(!CostBasis::Upstream.is_metered());
     }
 
     #[test]

@@ -8,9 +8,11 @@
 //!    budget must not be spent. Subscription and local calls are never
 //!    blocked by either — they cost no metered dollars.
 //! 2. **Span**: one `chat {model}` client span per call, carrying the OTel
-//!    GenAI usage attributes and the cost attributes
-//!    (`<ns>.cost.usd`, `<ns>.cost.price_table`, `<ns>.cost.billing`,
-//!    `<ns>.owner`; the namespace comes from [`Pricing::attribute_namespace`]).
+//!    GenAI usage attributes, `<ns>.owner` and the cost attributes
+//!    (`<ns>.cost.usd`, `<ns>.cost.price_table`, `<ns>.cost.billing`; the
+//!    namespace comes from [`Pricing::attribute_namespace`]). A call on
+//!    [`CostBasis::Upstream`] carries no cost attribute: the gateway it went
+//!    through records its dollars.
 //! 3. **Charge**: the SAME dollar figure written on the span is added to the
 //!    daily budget, to the session's running total and to the caller's
 //!    [`MeterScope`] (a turn, or a background job). Budget and span can
@@ -27,7 +29,7 @@ use opentelemetry::global::BoxedSpan;
 use opentelemetry::trace::{Span as _, SpanKind, Tracer as _};
 use opentelemetry::{global as otel_global, KeyValue};
 
-use super::{CallCost, Pricing};
+use super::{CallCost, CostSource, Pricing};
 use crate::provider::{Provider, SharedProvider, StreamChunk};
 use crate::session::SessionManager;
 use crate::task::UsageAccum;
@@ -296,7 +298,7 @@ impl CostMeter {
             basis: CostBasis::Subscription,
             usd: Some(0.0),
             price_table: self.pricing.table_version().to_owned(),
-            source: super::CostSource::NotMetered,
+            source: CostSource::NotMetered,
         };
         let buckets = UsageBuckets {
             input: input_tokens,
@@ -346,15 +348,23 @@ pub(crate) fn call_attributes(
         // Deprecated keys, kept for one release.
         KeyValue::new("gen_ai.usage.cache_read_tokens", b.cache_read as i64),
         KeyValue::new("gen_ai.usage.cache_write_tokens", b.cache_write as i64),
-        KeyValue::new(
-            format!("{namespace}.cost.price_table"),
-            cost.price_table.clone(),
-        ),
-        KeyValue::new(format!("{namespace}.cost.billing"), cost.basis.as_str()),
     ];
     if let Some(model) = response_model {
         attrs.push(KeyValue::new("gen_ai.response.model", model.to_owned()));
     }
+    // An upstream gateway prices and records the call itself: a second
+    // figure here would be counted twice downstream.
+    if cost.source == CostSource::Upstream {
+        return attrs;
+    }
+    attrs.push(KeyValue::new(
+        format!("{namespace}.cost.price_table"),
+        cost.price_table.clone(),
+    ));
+    attrs.push(KeyValue::new(
+        format!("{namespace}.cost.billing"),
+        cost.basis.as_str(),
+    ));
     if let Some(usd) = cost.usd {
         attrs.push(KeyValue::new(format!("{namespace}.cost.usd"), usd));
     }
@@ -537,7 +547,6 @@ impl Provider for MeteredProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pricing::CostSource;
 
     fn attr<'a>(attrs: &'a [KeyValue], key: &str) -> Option<&'a KeyValue> {
         attrs.iter().find(|kv| kv.key.as_str() == key)
@@ -596,5 +605,32 @@ mod tests {
         let a = call_attributes("ns", None, &UsageBuckets::default(), &cost);
         assert!(attr(&a, "ns.cost.usd").is_none());
         assert!(attr(&a, "gen_ai.response.model").is_none());
+    }
+
+    #[test]
+    fn upstream_cost_emits_tokens_but_no_cost_attributes() {
+        let b = UsageBuckets {
+            input: 600,
+            output: 180,
+            ..Default::default()
+        };
+        let cost = Pricing::bundled().cost_of_call(
+            CostBasis::Upstream,
+            "gpt-4o",
+            &TokenUsage {
+                input_tokens: 600,
+                output_tokens: 180,
+                ..Default::default()
+            },
+        );
+        let a = call_attributes("ns", Some("gpt-4o"), &b, &cost);
+        assert_eq!(
+            attr(&a, "gen_ai.usage.input_tokens").map(|kv| kv.value.to_string()),
+            Some("600".to_owned())
+        );
+        assert!(
+            a.iter().all(|kv| !kv.key.as_str().starts_with("ns.cost.")),
+            "no cost attribute for an upstream-measured call: {a:?}"
+        );
     }
 }

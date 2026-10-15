@@ -233,6 +233,7 @@ enum pricing/mod.rs:PriceOutcome
 struct pricing/mod.rs:Pricing
 enum pricing/mod.rs:PricingError
 struct pricing/mod.rs:TierAttributes
+const pricing/mod.rs:UPSTREAM
 fn pricing/mod.rs:attribute_namespace
 fn pricing/mod.rs:bundled
 fn pricing/mod.rs:cost_of_call
