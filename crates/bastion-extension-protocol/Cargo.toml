@@ -1,6 +1,6 @@
 [package]
 name    = "bastion-extension-protocol"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [lints.rust]
@@ -8,6 +8,10 @@ unsafe_code = "forbid"
 
 [lints.clippy]
 all = "warn"
+# async_trait marks every boxed-future trait method `#[must_use]`; clippy
+# 1.99 reports that as `double_must_use` on each trait definition. The
+# attribute is generated, not written here.
+double_must_use = { level = "allow", priority = 1 }
 
 [dependencies]
 bastion-types = { path = "../bastion-types" }
@@ -21,5 +25,9 @@ semver        = { version = "1", features = ["serde"] }
 # `LockEntry.hash` — content digest of a resolved component, mirrors
 # `bastion-agent-runtime`'s `Artifact.digest` convention).
 sha2          = "0.10"
+# BEX-03 publisher signatures: Ed25519 verification against host-injected
+# trust anchors (same crate and major as bastion-mesh's identity signing).
+ed25519-dalek = "2"
+base64        = "0.22"
 
 [dev-dependencies]

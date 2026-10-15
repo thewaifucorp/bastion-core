@@ -1,6 +1,6 @@
 # External agent runtime support
 
-> Code-derived matrix for `bastion-agent-runtime` 0.3.0. Adapter descriptors are the contract; credentialed live tests are reproducible evidence, not a permanent promise about third-party CLIs.
+> Code-derived matrix for `bastion-agent-runtime` 0.4.0. Adapter descriptors are the contract; credentialed live tests are reproducible evidence, not a permanent promise about third-party CLIs.
 
 ## Adapter capabilities
 

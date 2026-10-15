@@ -111,7 +111,7 @@ Deliberate boundaries: no NLP heuristics live here (an `Intent` arrives with its
 A native turn is deliberately explicit:
 
 1. The host constructs an `AgentLoop` with its provider, responder, memory, session manager, approval gate, and optional ports.
-2. It calls `run_turn_for` with input and a canonical owner identifier.
+2. It calls `run_turn_for` with input and a canonical owner identifier (or `run_turn_with` to name its own session and attach an opaque context; `AgentLoopPool` shares loops between concurrent requests).
 3. Core loads owner-scoped state and context, applies trust and privacy handling, then runs input guardrails.
 4. Tool calls pass through egress, approval, execution, and result-tagging boundaries.
 5. Core validates output, persists session state, records usage, emits observer events, and returns text to the host.

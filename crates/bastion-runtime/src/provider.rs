@@ -341,6 +341,7 @@ mod tests {
             owner: "test-owner".into(),
             privacy_tier: Some(crate::memory::PrivacyTier::LocalOnly),
             allowed_tools: None,
+            ..Default::default()
         }
     }
 
