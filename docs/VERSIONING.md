@@ -91,6 +91,27 @@ new, less-settled surface continues to land); each is free to make its own
 1.0 call independently once its own contract has proven stable in
 practice.
 
+### 5.1 When the Kernel crosses 1.0
+
+"Proven stable in practice" is not left to feel. The Kernel crates
+(`bastion-types`, `bastion-runtime`, `bastion-memory`) move to `1.0.0`
+together, and only when **both** of these hold:
+
+1. **Two consecutive releases without a breaking Kernel change.** Two repo
+   tags in a row (§7.1) in which none of the three Kernel crates advanced its
+   minor version. Additive changes and fixes (patch bumps) do not reset the
+   count; a single Kernel minor bump does.
+2. **A second host runs the same tag.** At least one host application other
+   than `bastion-agent` consumes the Kernel and runs on the same
+   `bastion-core` tag that `bastion-agent` pins — so the contract is shown to
+   serve more than the one product it grew up with, at the same version, not
+   an older one.
+
+Until both hold, every Kernel crate stays `0.x` and §1 applies unchanged.
+Meeting them makes 1.0 possible, not automatic: the release that crosses it
+says so in the CHANGELOG and records which two tags and which host satisfied
+the criterion. Extension crates are unaffected by this rule (see above).
+
 ## 6. 2026-07-25 fabric-readiness pass (pre-1.0 checklist, not a freeze)
 
 Before `bastion-runtime` (Kernel tier) can responsibly cross 1.0, every
