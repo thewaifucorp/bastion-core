@@ -201,6 +201,7 @@ type memory.rs:SharedMemory
 struct policy.rs:PolicyChannel
 trait policy.rs:PolicyValidator
 fn policy.rs:apply
+fn policy.rs:current_turn_policy
 fn policy.rs:effective
 fn policy.rs:from_artifact
 fn policy.rs:new
