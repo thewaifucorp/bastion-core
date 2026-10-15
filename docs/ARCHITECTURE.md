@@ -46,7 +46,7 @@ The dependency allowlist in `scripts/check-crate-deps.sh` is authoritative. It p
 - `bastion-mcp` supplies MCP clients, registry adapters, OAuth support, and a `ToolSource` implementation.
 - `bastion-agent-runtime` defines the external-agent contract and Codex/ACP adapters.
 - `bastion-mesh` supplies identity, peer transport, `.af` interop, context, and scheduling.
-- `bastion-extension-protocol` defines manifests, permissions, trust tiers, signatures, and lockfiles.
+- `bastion-extension-protocol` defines manifests, permissions, trust tiers, signatures, and lockfiles. It verifies Ed25519 publisher signatures over a manifest's directory content against trust anchors the host injects (`TrustAnchors`); it embeds no key, and the tier it derives is shown to the owner but never consulted by enforcement.
 - `bastion-extension-wasm` provides the isolated WASM execution mechanism and does not know product manifests or capabilities.
 - `bastion-sandbox` confines host programs Bastion runs (tool CLIs, stdio MCP servers, subprocess extensions, agent harnesses) at the OS level: bubblewrap or Landlock + seccomp on Linux, Seatbelt on macOS, an AppContainer inside a Job Object on Windows. Deny by default; it knows only paths, environment and network, never capabilities.
 

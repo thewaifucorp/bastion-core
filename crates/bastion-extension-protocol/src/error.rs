@@ -80,8 +80,21 @@ pub enum ExtensionError {
     #[error("manifest '{id}' is invalid: {reason}")]
     InvalidManifest { id: String, reason: String },
 
-    #[error("signature verification failed for extension '{id}'")]
-    SignatureInvalid { id: String },
+    /// A signature is present but malformed, uses an unsupported
+    /// algorithm, or does not verify against any trusted key of the
+    /// publisher it names. The host rejects the install — an invalid
+    /// signature is never downgraded to `Local`.
+    #[error("signature verification failed for '{id}': {reason}")]
+    SignatureInvalid { id: String, reason: String },
+
+    /// A host-supplied trust anchor (publisher key) is unusable.
+    #[error("invalid trust anchor for publisher '{publisher}': {reason}")]
+    InvalidTrustAnchor { publisher: String, reason: String },
+
+    /// Signed content could not be read or pinned (unreadable file, symlink,
+    /// non-normalized path).
+    #[error("content '{path}' cannot be signed or verified: {detail}")]
+    ContentUnreadable { path: String, detail: String },
 
     #[error("lockfile mismatch for extension '{id}': expected hash {expected}, found {found}")]
     LockfileMismatch {
