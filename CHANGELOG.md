@@ -15,8 +15,29 @@ fields, `BastionError` gained `PriceUnknown`) and `bastion-runtime` 0.4.2 →
 on the tag. `bastion-agent-runtime` 0.3.1 → 0.4.0 (`ResumeSpec` gained a
 public field, so struct literals break). `bastion-providers` 0.2.7 → 0.2.8 and
 `bastion-cognition` 0.2.2 → 0.2.3 change behavior without breaking their API.
+`bastion-extension-protocol` 0.1.0 → 0.2.0 (`PackManifest` and `LockEntry`
+gained public fields, `ExtensionError::SignatureInvalid` gained `reason`).
 
 ### Added
+
+- **Extension and pack signatures are verified (`bastion-extension-protocol`
+  0.2.0).** `TrustAnchors` holds the publisher keys a host trusts, each bound
+  to the tier it grants; the crate embeds no key. `TrustAnchors::verify`
+  derives the tier: no signature → `Unsigned` (`Local`); a publisher the host
+  has no key for → `UnknownPublisher` (`Local`, never elevated); a signature
+  that verifies (Ed25519, `verify_strict`) → that key's tier; a malformed,
+  unsupported or non-verifying signature → `ExtensionError::SignatureInvalid`,
+  which the host turns into a rejected install. The signed payload
+  (`signing_payload`) is a versioned text block — kind, id, version and the
+  `sha256` of every file in the manifest's directory
+  (`ContentDigests::from_dir`, which skips `*.sig` and refuses symlinks) — so
+  editing any shipped file invalidates the signature, and a pack signature
+  cannot be replayed as an extension signature. `PackManifest::signature`,
+  `{ExtensionManifest,PackManifest}::{signing_payload,verify_signature}`,
+  `TrustAnchors::add_key_file` (`<publisher> ed25519 <base64>` lines),
+  `Signature::sign_ed25519`, `public_key_base64`, `LockEntry::tier`
+  (defaults to `Local` for older locks), `ExtensionError::{InvalidTrustAnchor,
+  ContentUnreadable}`.
 
 - **`claude` runtime: Claude Code on the user's subscription, under the
   user's own login (`bastion-agent-runtime` `claude_code`).**

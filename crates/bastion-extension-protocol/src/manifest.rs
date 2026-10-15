@@ -1,7 +1,9 @@
 //! Extension/pack manifests (design doc §1.1).
 
+use crate::content::ContentDigests;
+use crate::error::ExtensionError;
 use crate::permission::PermissionSet;
-use crate::trust::Signature;
+use crate::trust::{signing_payload, Signature, SignedKind, TrustAnchors, Verification};
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -117,11 +119,35 @@ pub struct ExtensionManifest {
     pub secrets: Vec<SecretRef>,
     pub entrypoint: Entrypoint,
     pub migrations: Vec<MigrationRef>,
-    /// `None` = unsigned, always resolves to `TrustTier::Local`.
+    /// Publisher signature over [`ExtensionManifest::signing_payload`].
+    /// `None` = unsigned, always resolves to `TrustTier::Local`. Usually
+    /// loaded from the detached `extension.toml.sig` file.
+    #[serde(default)]
     pub signature: Option<Signature>,
 }
 
 impl ExtensionManifest {
+    /// Bytes a publisher signs for this extension: its id and version plus
+    /// `content`, the digests of every file in the extension's directory
+    /// (see [`signing_payload`]).
+    pub fn signing_payload(&self, content: &ContentDigests) -> Result<Vec<u8>, ExtensionError> {
+        signing_payload(SignedKind::Extension, &self.id, &self.version, content)
+    }
+
+    /// Verify `self.signature` over `content` against the host's anchors.
+    /// `Err(SignatureInvalid)` means the host must reject the install.
+    pub fn verify_signature(
+        &self,
+        content: &ContentDigests,
+        anchors: &TrustAnchors,
+    ) -> Result<Verification, ExtensionError> {
+        anchors.verify(
+            &self.id,
+            &self.signing_payload(content)?,
+            self.signature.as_ref(),
+        )
+    }
+
     /// Structural self-consistency: `kind` must agree with `entrypoint`, and
     /// every `Provided::Capability(name)` in `provides` must also appear in
     /// `permissions.capabilities` — a manifest cannot even ADVERTISE
@@ -173,6 +199,33 @@ pub struct PackManifest {
     pub skills: Vec<String>,
     pub personas: Vec<String>,
     pub defaults: LoadoutDefaults,
+    /// Publisher signature over [`PackManifest::signing_payload`] — usually
+    /// loaded from the detached `pack.toml.sig` file. It covers every file
+    /// in the pack directory, member extensions included.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<Signature>,
+}
+
+impl PackManifest {
+    /// Bytes a publisher signs for this pack: its id and version plus
+    /// `content`, the digests of every file in the pack directory.
+    pub fn signing_payload(&self, content: &ContentDigests) -> Result<Vec<u8>, ExtensionError> {
+        signing_payload(SignedKind::Pack, &self.id, &self.version, content)
+    }
+
+    /// Verify `self.signature` over `content` against the host's anchors.
+    /// `Err(SignatureInvalid)` means the host must reject the install.
+    pub fn verify_signature(
+        &self,
+        content: &ContentDigests,
+        anchors: &TrustAnchors,
+    ) -> Result<Verification, ExtensionError> {
+        anchors.verify(
+            &self.id,
+            &self.signing_payload(content)?,
+            self.signature.as_ref(),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -202,6 +255,86 @@ mod tests {
             migrations: vec![],
             signature: None,
         }
+    }
+
+    fn pack() -> PackManifest {
+        PackManifest {
+            id: "acme/pack".to_string(),
+            version: Version::new(1, 0, 0),
+            extensions: vec![],
+            skills: vec![],
+            personas: vec![],
+            defaults: LoadoutDefaults::default(),
+            signature: None,
+        }
+    }
+
+    fn anchors(seed: &[u8; 32]) -> TrustAnchors {
+        let mut a = TrustAnchors::new();
+        a.add_key_file(
+            crate::TrustTier::Official,
+            &format!("acme ed25519 {}", crate::public_key_base64(seed)),
+        )
+        .unwrap();
+        a
+    }
+
+    #[test]
+    fn signed_pack_verifies_and_tampered_content_does_not() {
+        let seed = [3u8; 32];
+        let mut content = ContentDigests::new();
+        content.insert("pack.toml", b"v1").unwrap();
+        let mut p = pack();
+        p.signature = Some(Signature::sign_ed25519(
+            "acme",
+            &seed,
+            &p.signing_payload(&content).unwrap(),
+        ));
+        assert_eq!(
+            p.verify_signature(&content, &anchors(&seed))
+                .unwrap()
+                .tier(),
+            crate::TrustTier::Official
+        );
+
+        content.insert("pack.toml", b"v2").unwrap();
+        assert!(matches!(
+            p.verify_signature(&content, &anchors(&seed)),
+            Err(ExtensionError::SignatureInvalid { .. })
+        ));
+    }
+
+    #[test]
+    fn pack_signature_is_not_valid_for_an_extension_with_same_id() {
+        let seed = [3u8; 32];
+        let content = ContentDigests::new();
+        let p = pack();
+        let sig = Signature::sign_ed25519("acme", &seed, &p.signing_payload(&content).unwrap());
+        let mut m = manifest_with(
+            ExtensionKind::Declarative,
+            Entrypoint::Declarative {
+                artifact_path: "widget.json".into(),
+            },
+            vec![],
+            vec![],
+        );
+        m.id = p.id.clone();
+        m.signature = Some(sig);
+        assert!(m.verify_signature(&content, &anchors(&seed)).is_err());
+    }
+
+    #[test]
+    fn unsigned_manifests_parse_and_resolve_local() {
+        let p: PackManifest = serde_json::from_str(
+            r#"{"id":"acme/pack","version":"1.0.0","extensions":[],"skills":[],"personas":[],"defaults":{"enabled_extensions":[]}}"#,
+        )
+        .unwrap();
+        assert!(p.signature.is_none());
+        assert_eq!(
+            p.verify_signature(&ContentDigests::new(), &TrustAnchors::new())
+                .unwrap(),
+            Verification::Unsigned
+        );
     }
 
     #[test]

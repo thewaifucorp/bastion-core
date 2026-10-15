@@ -22,8 +22,10 @@
 //! - [`manifest`] — `ExtensionManifest`/`PackManifest` and their parts (§1.1).
 //! - [`permission`] — `PermissionSet` and the deny-by-default scopes it's made
 //!   of, plus the pure `allows_*`/`is_subset_of` decision logic (§1.2).
-//! - [`trust`] — trust tiers and publisher signatures (§1.3). Informational
-//!   only; never consulted by enforcement.
+//! - [`trust`] — trust tiers, publisher signatures and their verification
+//!   against host-injected [`TrustAnchors`] (§1.3, BEX-03). Informational
+//!   only; never consulted by enforcement. This crate embeds no key.
+//! - [`content`] — `ContentDigests`, the per-file digests a signature covers.
 //! - [`error`] — `ExtensionError`, the one typed-error vocabulary every
 //!   blocked adversarial vector surfaces through (§8).
 //! - [`lockfile`] — `LoadoutLock`/`LockEntry`, the reproducible lock format
@@ -38,12 +40,14 @@
 /// crate version.
 pub const PROTOCOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub mod content;
 pub mod error;
 pub mod lockfile;
 pub mod manifest;
 pub mod permission;
 pub mod trust;
 
+pub use content::ContentDigests;
 pub use error::ExtensionError;
 pub use lockfile::{digest_hex, LoadoutLock, LockEntry};
 pub use manifest::{
@@ -51,4 +55,7 @@ pub use manifest::{
     Provided, Requirement, SecretRef,
 };
 pub use permission::{DeviceKind, EgressScope, FsScope, MemoryScope, PermissionSet};
-pub use trust::{Signature, TrustTier};
+pub use trust::{
+    public_key_base64, signing_payload, Signature, SignedKind, TrustAnchors, TrustTier,
+    Verification, ED25519, SIGNATURE_DOMAIN, SIGNATURE_FILE_SUFFIX,
+};

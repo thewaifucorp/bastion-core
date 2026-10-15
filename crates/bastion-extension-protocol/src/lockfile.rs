@@ -2,7 +2,7 @@
 //! hash+signature per component. Pure data + a pure hashing helper — the file
 //! I/O (reading/writing `loadout.lock`) is a host concern.
 
-use crate::trust::Signature;
+use crate::trust::{Signature, TrustTier};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -15,7 +15,13 @@ pub struct LockEntry {
     /// `sha256:<hex>` digest of the resolved manifest/artifact bytes —
     /// mirrors `bastion_agent_runtime::Artifact.digest`'s convention.
     pub hash: String,
+    /// The signature that established `tier` — the component's own, or the
+    /// signature of the pack that shipped it. `None` when unsigned.
     pub signature: Option<Signature>,
+    /// Tier derived from verifying `signature` at install/upgrade/rollback
+    /// time (BEX-03). Absent in locks written before 0.2.0 → `Local`.
+    #[serde(default)]
+    pub tier: TrustTier,
 }
 
 /// The full reproducible lock for a `Loadout`.
@@ -74,18 +80,27 @@ mod tests {
             version: Version::new(1, 0, 0),
             hash: digest_hex(b"v1"),
             signature: None,
+            tier: TrustTier::Local,
         });
         lock.upsert(LockEntry {
             id: "acme/widget".to_string(),
             version: Version::new(2, 0, 0),
             hash: digest_hex(b"v2"),
             signature: None,
+            tier: TrustTier::Local,
         });
         assert_eq!(lock.entries.len(), 1);
         assert_eq!(
             lock.find("acme/widget").unwrap().version,
             Version::new(2, 0, 0)
         );
+    }
+
+    #[test]
+    fn entry_without_tier_deserializes_as_local() {
+        let json = r#"{"id":"acme/widget","version":"1.0.0","hash":"sha256:00","signature":null}"#;
+        let entry: LockEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.tier, TrustTier::Local);
     }
 
     #[test]
@@ -96,6 +111,7 @@ mod tests {
             version: Version::new(1, 0, 0),
             hash: digest_hex(b"v1"),
             signature: None,
+            tier: TrustTier::Local,
         });
         let removed = lock.remove("acme/widget");
         assert!(removed.is_some());
