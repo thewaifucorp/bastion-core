@@ -12,6 +12,7 @@ pub mod agent;
 pub mod capability;
 pub mod hooks;
 pub mod memory;
+pub mod policy;
 pub mod pricing;
 pub mod provider;
 pub mod provider_auth;

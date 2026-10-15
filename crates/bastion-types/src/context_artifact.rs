@@ -21,6 +21,13 @@
 //! `bastion-runtime`, a crate above this one) — a host wraps one of these in
 //! its own `TurnContextProvider` impl; SEAM #2 stays the single injection
 //! seam, this is just the data it reads from.
+//!
+//! Delivering a revision to agents that are already running is the one
+//! fan-out step the runtime does take on: `bastion_runtime::policy::PolicyChannel`
+//! keeps one of these artifacts, accepts [`ContextUpdate`]s (whole revisions
+//! or JSON Merge Patch deltas) and answers each with a [`ContextAck`] naming
+//! the version in force. Deciding what to publish, and when, stays with the
+//! host.
 
 use serde::{Deserialize, Serialize};
 
@@ -137,6 +144,89 @@ impl VersionedContextArtifact {
     }
 }
 
+/// One change delivered to an artifact that running agents follow
+/// (`bastion_runtime::policy::PolicyChannel`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ContextUpdate {
+    /// Publish a whole revision.
+    Snapshot(ContextRevision),
+    /// Publish a revision computed from the latest one: `patch` is an
+    /// RFC 7386 JSON Merge Patch applied to the latest revision's `content`
+    /// (which must therefore be a JSON document). Accepted only when
+    /// `base_version` is the latest published version, so a delta never
+    /// lands on a revision it was not computed against.
+    Delta {
+        base_version: u64,
+        version: u64,
+        patch: serde_json::Value,
+        provenance: String,
+        effective_from: i64,
+    },
+}
+
+impl ContextUpdate {
+    /// The version this update would publish.
+    pub fn version(&self) -> u64 {
+        match self {
+            Self::Snapshot(revision) => revision.version,
+            Self::Delta { version, .. } => *version,
+        }
+    }
+}
+
+/// Why an update was not published.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "reason", rename_all = "snake_case")]
+pub enum ContextUpdateRejection {
+    /// A delta's `base_version` is not the latest published version (or
+    /// nothing is published yet): resend a snapshot or a delta against
+    /// `latest_version`.
+    StaleBase { base_version: u64 },
+    /// `version` does not exceed the latest published version (and is not
+    /// an identical redelivery of it).
+    NotNewer,
+    /// The update is malformed (a patch that is not an object, a base that
+    /// is not JSON) or the host's validator refused the resulting revision.
+    Invalid { detail: String },
+}
+
+/// Outcome of delivering one update.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ContextAckStatus {
+    /// Published and effective now: every turn that starts from here on
+    /// runs under it.
+    Applied,
+    /// Published; becomes effective at its `effective_from`.
+    Scheduled,
+    /// The same version with the same content was already published.
+    Unchanged,
+    /// Nothing was published; what was in force stays in force.
+    Rejected(ContextUpdateRejection),
+}
+
+/// Acknowledgement of one update, always naming what is in force afterwards.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextAck {
+    /// The version the update asked for.
+    pub requested_version: u64,
+    /// The version effective once the update was handled (`None` when no
+    /// revision is effective yet).
+    pub effective_version: Option<u64>,
+    /// The latest published version (may still lie in the future).
+    pub latest_version: Option<u64>,
+    pub status: ContextAckStatus,
+}
+
+impl ContextAck {
+    /// Whether the requested version is published (effective now or
+    /// scheduled).
+    pub fn is_published(&self) -> bool {
+        !matches!(self.status, ContextAckStatus::Rejected(_))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,5 +305,43 @@ mod tests {
     fn stale_policy_is_readable_by_a_host_side_consumer() {
         let artifact = VersionedContextArtifact::new(StalePolicy::FailClosed);
         assert_eq!(artifact.stale_policy(), StalePolicy::FailClosed);
+    }
+
+    #[test]
+    fn update_and_ack_wire_shape() {
+        let delta: ContextUpdate = serde_json::from_value(serde_json::json!({
+            "kind": "delta",
+            "base_version": 1,
+            "version": 2,
+            "patch": {"limit": 3},
+            "provenance": "rules-service",
+            "effective_from": 0
+        }))
+        .unwrap();
+        assert_eq!(delta.version(), 2);
+
+        let snapshot = ContextUpdate::Snapshot(rev(1, "{}", 0));
+        let wire = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(wire["kind"], "snapshot");
+        assert_eq!(wire["version"], 1);
+
+        let ack = ContextAck {
+            requested_version: 3,
+            effective_version: Some(2),
+            latest_version: Some(2),
+            status: ContextAckStatus::Rejected(ContextUpdateRejection::StaleBase {
+                base_version: 1,
+            }),
+        };
+        assert!(!ack.is_published());
+        assert_eq!(
+            serde_json::to_value(&ack).unwrap(),
+            serde_json::json!({
+                "requested_version": 3,
+                "effective_version": 2,
+                "latest_version": 2,
+                "status": {"status": "rejected", "reason": "stale_base", "base_version": 1}
+            })
+        );
     }
 }

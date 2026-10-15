@@ -726,6 +726,7 @@ dependencies = [
  "bastion-types",
  "futures-util",
  "opentelemetry",
+ "opentelemetry_sdk",
  "regex",
  "rusqlite",
  "serde",

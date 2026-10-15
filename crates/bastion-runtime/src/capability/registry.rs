@@ -8,6 +8,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// Invocation context — resolved BEFORE entering registry.invoke.
+///
+/// Build it with a struct literal ending in `..Default::default()` so fields
+/// added later keep compiling.
+#[derive(Debug, Clone, Default)]
 pub struct InvokeCtx {
     pub owner: String,
     pub privacy_tier: Option<PrivacyTier>,
@@ -18,6 +22,64 @@ pub struct InvokeCtx {
     /// to exactly the capability names in `set` — enforced by
     /// `CapabilityRegistry::invoke`'s Policy 0, below.
     pub allowed_tools: Option<Arc<HashSet<String>>>,
+    /// The host's own per-turn context, exactly as the host passed it in
+    /// [`crate::agent::turn::TurnRequest::with_host_context`]. The core
+    /// never reads, logs or persists it: it only carries it from the turn
+    /// to every capability the turn dispatches, so a host capability can
+    /// see what the host knows about the turn (the object it is about, the
+    /// caller's scope, ...). `None` when the turn carried none.
+    pub host_context: Option<Arc<Value>>,
+    /// Trace position of this call: the `execute_tool` span the runtime
+    /// opened for it, in the same trace as the turn's `invoke_agent` span
+    /// and its `chat` spans. A capability that calls out to another system
+    /// propagates [`TraceContext::traceparent`] so that work joins the turn's
+    /// trace. The span is also the current OpenTelemetry context while
+    /// `invoke` runs, so spans the capability starts nest under it. `None`
+    /// when no tracer is installed.
+    pub trace: Option<TraceContext>,
+    /// The rule revision effective for the turn ([`crate::policy`]). The
+    /// same revision for every call of one turn, even if an update lands
+    /// mid-turn. `None` when no revision is effective.
+    pub policy: Option<Arc<bastion_types::ContextRevision>>,
+}
+
+/// W3C trace position (trace id + span id) of a span the runtime emitted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceContext {
+    /// 32 lowercase hex digits.
+    pub trace_id: String,
+    /// 16 lowercase hex digits.
+    pub span_id: String,
+    /// Whether the span is being recorded and exported.
+    pub sampled: bool,
+}
+
+impl TraceContext {
+    /// The position of `span_context`, `None` when it is not a real span
+    /// (no tracer installed).
+    pub fn from_span_context(span_context: &opentelemetry::trace::SpanContext) -> Option<Self> {
+        span_context.is_valid().then(|| Self {
+            trace_id: span_context.trace_id().to_string(),
+            span_id: span_context.span_id().to_string(),
+            sampled: span_context.is_sampled(),
+        })
+    }
+
+    /// The position of the span current in the OpenTelemetry context.
+    pub fn current() -> Option<Self> {
+        use opentelemetry::trace::TraceContextExt as _;
+        Self::from_span_context(opentelemetry::Context::current().span().span_context())
+    }
+
+    /// The W3C `traceparent` header value for this position.
+    pub fn traceparent(&self) -> String {
+        format!(
+            "00-{}-{}-{}",
+            self.trace_id,
+            self.span_id,
+            if self.sampled { "01" } else { "00" }
+        )
+    }
 }
 
 /// Persona contract v2 tool-authority check (Policy 0) — shared between
@@ -601,6 +663,7 @@ mod tests {
             owner: owner.to_string(),
             privacy_tier: Some(PrivacyTier::CloudOk),
             allowed_tools: None,
+            ..Default::default()
         }
     }
 
@@ -794,6 +857,7 @@ mod tests {
                     owner: "alice".to_string(),
                     privacy_tier: Some(PrivacyTier::LocalOnly),
                     allowed_tools: None,
+                    ..Default::default()
                 },
             )
             .await
@@ -828,6 +892,7 @@ mod tests {
                     owner: "alice".to_string(),
                     privacy_tier: Some(PrivacyTier::CloudOk),
                     allowed_tools: None,
+                    ..Default::default()
                 },
             )
             .await
@@ -905,6 +970,7 @@ mod tests {
                         owner: "alice".to_string(),
                         privacy_tier: Some(PrivacyTier::CloudOk),
                         allowed_tools: None,
+                        ..Default::default()
                     },
                 )
                 .await;
@@ -944,6 +1010,7 @@ mod tests {
                     owner: "alice".to_string(),
                     privacy_tier: Some(PrivacyTier::CloudOk),
                     allowed_tools: None,
+                    ..Default::default()
                 },
             )
             .await;
@@ -972,6 +1039,7 @@ mod tests {
                     owner: "alice".to_string(),
                     privacy_tier: Some(PrivacyTier::CloudOk),
                     allowed_tools: allowed_set(&["goal_create"]),
+                    ..Default::default()
                 },
             )
             .await;
@@ -1001,6 +1069,7 @@ mod tests {
                     owner: "alice".to_string(),
                     privacy_tier: Some(PrivacyTier::CloudOk),
                     allowed_tools: None,
+                    ..Default::default()
                 },
             )
             .await;
@@ -1024,6 +1093,7 @@ mod tests {
                     owner: "alice".to_string(),
                     privacy_tier: Some(PrivacyTier::CloudOk),
                     allowed_tools: allowed_set(&["memory_search", "goal_create"]),
+                    ..Default::default()
                 },
             )
             .await;

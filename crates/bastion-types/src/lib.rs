@@ -7,7 +7,10 @@ pub mod secret;
 pub use secret::{NullSecretResolver, SecretRef, SecretResolver, SecretValue};
 
 pub mod context_artifact;
-pub use context_artifact::{ContextRevision, StalePolicy, VersionedContextArtifact};
+pub use context_artifact::{
+    ContextAck, ContextAckStatus, ContextRevision, ContextUpdate, ContextUpdateRejection,
+    StalePolicy, VersionedContextArtifact,
+};
 
 pub mod provider_catalog;
 pub use provider_catalog::{
@@ -752,6 +755,11 @@ pub enum BastionError {
     Provider(String),
     #[error("Session error: {0}")]
     Session(String),
+    /// A turn named a session that exists but belongs to another owner.
+    /// Raised before anything is read from or written to that session, so
+    /// one owner can never address another owner's history by id.
+    #[error("Session '{session_id}' belongs to another owner")]
+    SessionOwnerMismatch { session_id: String },
     #[error("MCP timeout on tool '{tool}' after {elapsed_ms}ms")]
     McpTimeout { tool: String, elapsed_ms: u64 },
     #[error("Tool loop cap exceeded (10 rounds)")]

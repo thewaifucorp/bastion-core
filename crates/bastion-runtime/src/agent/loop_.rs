@@ -6,17 +6,21 @@ use crate::agent::ports::{
     PermissionGate, PreCompactionFlush, ProviderResolver, Responder, ToolResultObserver,
     ToolSource, TurnContext, TurnKernel,
 };
+use crate::agent::turn::TurnRequest;
 use crate::hooks::egress::EgressHook;
 use crate::hooks::guardrails::InputGuardrail;
 use crate::hooks::output_validator::OutputValidator;
 use crate::memory::SharedMemory;
+use crate::policy::PolicyChannel;
 use crate::provider::{call_with_retry, SharedProvider};
+use crate::session::SessionLocks;
 use crate::session::SessionManager;
 use crate::types::{
     BastionError, CallConfig, ContentPart, DenyScope, Message, MessageContent, Role,
 };
 use bastion_types::DeploymentContext;
-use opentelemetry::trace::{Span as _, SpanKind, Tracer as _};
+use opentelemetry::context::FutureExt as _;
+use opentelemetry::trace::{Span as _, SpanKind, TraceContextExt as _, Tracer as _};
 use opentelemetry::{global as otel_global, KeyValue};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -253,6 +257,18 @@ pub struct AgentLoop {
     )>,
     /// BUP-04: usage of the last completed turn (tokens, calls, dollars).
     last_turn_usage: Option<crate::task::UsageAccum>,
+    /// Per-session turn serialization ([`SessionLocks`]). Private to this
+    /// loop by default; hosts running several loops over one database share
+    /// one registry via [`AgentLoop::with_session_locks`].
+    session_locks: SessionLocks,
+    /// Rule revisions delivered by the host ([`PolicyChannel`]).
+    policy: PolicyChannel,
+    /// Host context of the turn in flight (`TurnRequest::host_context`).
+    turn_host_context: Option<Arc<serde_json::Value>>,
+    /// Rule revision the turn in flight runs under, taken at turn start.
+    turn_policy: Option<Arc<bastion_types::ContextRevision>>,
+    /// Rule version the last turn ran under.
+    last_turn_policy_version: Option<u64>,
 }
 
 impl AgentLoop {
@@ -354,6 +370,54 @@ impl AgentLoop {
             pricing: Arc::new(crate::pricing::Pricing::bundled()),
             turn_meter: None,
             last_turn_usage: None,
+            session_locks: SessionLocks::new(),
+            policy: PolicyChannel::new(),
+            turn_host_context: None,
+            turn_policy: None,
+            last_turn_policy_version: None,
+        }
+    }
+
+    /// Serialize this loop's turns through `locks`, shared with every other
+    /// loop over the same database (one loop per request, a pool, ...):
+    /// turns of one session never overlap, turns of different sessions run
+    /// in parallel.
+    pub fn with_session_locks(mut self, locks: SessionLocks) -> Self {
+        self.session_locks = locks;
+        self
+    }
+
+    /// The registry this loop serializes its turns through.
+    pub fn session_locks(&self) -> &SessionLocks {
+        &self.session_locks
+    }
+
+    /// Follow the rule revisions delivered through `channel` (shared with
+    /// every loop that must follow the same rules).
+    pub fn with_policy_channel(mut self, channel: PolicyChannel) -> Self {
+        self.policy = channel;
+        self
+    }
+
+    /// The channel delivering rule revisions to this loop. Clone it before
+    /// handing the loop to its task to deliver updates while it runs.
+    pub fn policy_channel(&self) -> &PolicyChannel {
+        &self.policy
+    }
+
+    /// The rule version the last turn ran under (`None` before the first
+    /// turn, or when no revision was effective).
+    pub fn last_turn_policy_version(&self) -> Option<u64> {
+        self.last_turn_policy_version
+    }
+
+    /// The per-turn part of an [`crate::capability::InvokeCtx`]: host
+    /// context and rule revision of the turn in flight.
+    fn turn_invoke_ctx(&self) -> crate::capability::InvokeCtx {
+        crate::capability::InvokeCtx {
+            host_context: self.turn_host_context.clone(),
+            policy: self.turn_policy.clone(),
+            ..Default::default()
         }
     }
 
@@ -1200,6 +1264,10 @@ impl AgentLoop {
                 // `allowed_tools` from (only `owner`), so `None` here is
                 // deliberate, not an oversight.
                 allowed_tools: None,
+                // The reply turn's own host context and rule revision; its
+                // trace position is whatever the host made current.
+                trace: crate::capability::TraceContext::current(),
+                ..self.turn_invoke_ctx()
             };
             // Plan 11-07 (SEC-04): `invoke()` now returns `TaggedValue` instead of
             // a bare `Value` — this call site already discards the Ok payload
@@ -1264,6 +1332,58 @@ impl AgentLoop {
         owner: &str,
         untrusted: bool,
     ) -> anyhow::Result<String> {
+        self.run_turn_with(TurnRequest::new(owner, user_input).untrusted(untrusted))
+            .await
+    }
+
+    /// Run one turn as described by `request`: optionally in a host-named
+    /// session, with an opaque host context for the turn's capabilities.
+    ///
+    /// Turns of one session are serialized through [`AgentLoop::session_locks`]
+    /// (a turn addressed to the owner's most recent session holds the
+    /// owner while it resolves that session, then the session itself).
+    pub async fn run_turn_with(&mut self, request: TurnRequest) -> anyhow::Result<String> {
+        let locks = self.session_locks.clone();
+        let _held = match &request.session_id {
+            Some(id) => locks.lock(id).await,
+            None => locks.lock_owner(&request.owner).await,
+        };
+        let owner_path_locks = request.session_id.is_none().then_some(&locks);
+        self.run_turn_held(&request, owner_path_locks).await
+    }
+
+    /// Run a turn whose session lock the caller already holds (the explicit
+    /// session) or, for an owner-addressed turn, whose owner lock it holds —
+    /// `owner_path_locks` then takes the resolved session too.
+    pub(crate) async fn run_turn_held(
+        &mut self,
+        request: &TurnRequest,
+        owner_path_locks: Option<&SessionLocks>,
+    ) -> anyhow::Result<String> {
+        self.turn_host_context = request.host_context.clone();
+        self.turn_policy = self.policy.effective();
+        let result = self
+            .run_turn_body(
+                &request.input,
+                &request.owner,
+                request.untrusted,
+                request.session_id.as_deref(),
+                owner_path_locks,
+            )
+            .await;
+        self.turn_host_context = None;
+        self.last_turn_policy_version = self.turn_policy.take().map(|r| r.version);
+        result
+    }
+
+    async fn run_turn_body(
+        &mut self,
+        user_input: &str,
+        owner: &str,
+        untrusted: bool,
+        explicit_session: Option<&str>,
+        owner_path_locks: Option<&SessionLocks>,
+    ) -> anyhow::Result<String> {
         let t_start = Instant::now();
 
         // HOOK-02: input guardrail before routing (screens empty/oversized/spam input)
@@ -1309,17 +1429,34 @@ impl AgentLoop {
             .with_kind(SpanKind::Internal)
             .with_attributes(vec![KeyValue::new("gen_ai.operation.name", "invoke_agent")])
             .start(&tracer);
+        if let Some(policy) = &self.turn_policy {
+            turn_span.set_attribute(KeyValue::new(
+                format!("{}.policy.version", self.pricing.attribute_namespace()),
+                i64::try_from(policy.version).unwrap_or(i64::MAX),
+            ));
+        }
 
         // CR-04: resolve or create a session PER OWNER so two owners never share history.
         // WR-08: for DEFAULT_OWNER (CLI path) reuse self.session_id chosen at startup to
         // avoid load_most_recent_id_for resurrecting an older _local session.
-        let session_id: String = if owner == DEFAULT_OWNER {
+        // A host-named session is created for `owner` on first use and
+        // refused when it belongs to another owner.
+        let session_id: String = if let Some(id) = explicit_session {
+            self.session.ensure_session_for(id, owner).await?;
+            id.to_owned()
+        } else if owner == DEFAULT_OWNER {
             self.session_id.clone()
         } else {
             match self.session.load_most_recent_id_for(owner).await? {
                 Some(id) => id,
                 None => self.session.create_session_for(owner).await?,
             }
+        };
+        // An owner-addressed turn now knows its session: hold it too, so a
+        // turn addressing the same session by id waits for this one.
+        let _session_held = match owner_path_locks {
+            Some(locks) => Some(locks.lock(&session_id).await),
+            None => None,
         };
         turn_span.set_attribute(KeyValue::new("gen_ai.conversation.id", session_id.clone()));
 
@@ -1362,8 +1499,13 @@ impl AgentLoop {
         // included, not only a TaskCase.
         let turn_scope = crate::pricing::MeterScope::turn(session_id.clone(), owner);
         self.turn_meter = Some((self.cost_meter(), turn_scope.clone()));
+        // Every span the turn opens (model calls, tool calls, persona
+        // routing) nests under `invoke_agent`, in one trace.
+        let turn_cx = opentelemetry::Context::current()
+            .with_remote_span_context(turn_span.span_context().clone());
         let dispatched = self
             .run_turn_dispatch(&session_id, owner, user_input, untrusted, &mut turn_span)
+            .with_context(turn_cx)
             .await;
         self.turn_meter = None;
         let turn_usage = turn_scope.usage();
@@ -1548,7 +1690,10 @@ impl AgentLoop {
             let provider =
                 crate::pricing::MeteredProvider::wrap(self.provider.clone(), meter, scope).await;
             let responder = self.responder.clone();
-            let deployment = self.deployment.clone();
+            let mut deployment = self.deployment.clone();
+            if let Some(policy) = &self.turn_policy {
+                deployment.policy_revision = Some(policy.version.to_string());
+            }
             let outcome = responder
                 .respond(TurnContext {
                     provider,
@@ -1748,7 +1893,7 @@ impl AgentLoop {
                         // D-13: route ALL tool calls through capability_registry.invoke.
                         // SEC-01: the approval gate is real now — whether this call queues
                         // is decided entirely by the capability's own needs_approval().
-                        let ctx = crate::capability::InvokeCtx {
+                        let mut ctx = crate::capability::InvokeCtx {
                             owner: owner.to_owned(),
                             // CR-01/CR-02: fail-closed — an unresolved tier is treated as the
                             // MOST restrictive (LocalOnly), never the most permissive. A None
@@ -1760,6 +1905,7 @@ impl AgentLoop {
                             // whichever persona is dispatching this turn. `None` stays
                             // unrestricted (legacy contract).
                             allowed_tools: allowed_tools.clone(),
+                            ..self.turn_invoke_ctx()
                         };
                         // SEAM #4: span filho execute_tool por tool call
                         let mut tool_span = tracer
@@ -1771,6 +1917,14 @@ impl AgentLoop {
                                 KeyValue::new("gen_ai.tool.call.id", tc.id.clone()),
                             ])
                             .start(&tracer);
+                        // The capability sees its own `execute_tool` span —
+                        // both as `ctx.trace` and as the current OTel context
+                        // while it runs — so its work joins the turn's trace.
+                        ctx.trace = crate::capability::TraceContext::from_span_context(
+                            tool_span.span_context(),
+                        );
+                        let tool_cx = opentelemetry::Context::current()
+                            .with_remote_span_context(tool_span.span_context().clone());
                         // SEC-04 (spotlighting, Plan 11-07): `trusted` is computed
                         // ONCE here, from `TaggedValue.trusted` when the call goes
                         // through the registry — the single policy boundary. The
@@ -1810,6 +1964,7 @@ impl AgentLoop {
                                             owner,
                                             resolved_tier,
                                         )
+                                        .with_context(tool_cx)
                                         .await
                                 }
                                 Err(e) => Err(e),
@@ -1824,6 +1979,7 @@ impl AgentLoop {
                             match self
                                 .capability_registry
                                 .invoke(&tc.name, tc.arguments.clone(), &ctx)
+                                .with_context(tool_cx)
                                 .await
                             {
                                 Ok(tagged) => (tagged.data, tagged.trusted),
@@ -2919,6 +3075,10 @@ fn frame_tool_result_content(source: &str, data: &serde_json::Value, trusted: bo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Host mechanisms: per-session serialization, the pool, host context,
+    /// trace correlation and rule delivery.
+    mod host;
 
     #[test]
     fn runtime_workspace_root_uses_the_host_base_when_set() {

@@ -257,6 +257,7 @@ fn ctx() -> InvokeCtx {
         owner: OWNER.into(),
         privacy_tier: Some(PrivacyTier::CloudOk),
         allowed_tools: None,
+        ..Default::default()
     }
 }
 

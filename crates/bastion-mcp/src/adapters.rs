@@ -298,6 +298,7 @@ mod mcp_tool_adapter_tests {
             owner: "test-owner".to_string(),
             privacy_tier: Some(PrivacyTier::LocalOnly),
             allowed_tools: None,
+            ..Default::default()
         };
         let result = registry
             .invoke("voice_transcribe", serde_json::json!({}), &ctx)
@@ -330,6 +331,7 @@ mod mcp_tool_adapter_tests {
             owner: "test-owner".to_string(),
             privacy_tier: Some(PrivacyTier::LocalOnly),
             allowed_tools: None,
+            ..Default::default()
         };
         let result = registry
             .invoke("voice_transcribe", serde_json::json!({}), &ctx)
