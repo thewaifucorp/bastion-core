@@ -218,6 +218,7 @@ mod tests {
             owner: owner.to_string(),
             privacy_tier: Some(PrivacyTier::LocalOnly),
             allowed_tools: None,
+            ..Default::default()
         }
     }
 

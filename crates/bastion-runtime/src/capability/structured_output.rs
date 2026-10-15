@@ -77,6 +77,7 @@ mod tests {
             owner: "test-owner".into(),
             privacy_tier: None,
             allowed_tools: None,
+            ..Default::default()
         }
     }
 

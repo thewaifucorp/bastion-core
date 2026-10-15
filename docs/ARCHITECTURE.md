@@ -46,17 +46,27 @@ The dependency allowlist in `scripts/check-crate-deps.sh` is authoritative. It p
 - `bastion-mcp` supplies MCP clients, registry adapters, OAuth support, and a `ToolSource` implementation.
 - `bastion-agent-runtime` defines the external-agent contract and Codex/ACP adapters.
 - `bastion-mesh` supplies identity, peer transport, `.af` interop, context, and scheduling.
-- `bastion-extension-protocol` defines manifests, permissions, trust tiers, signatures, and lockfiles.
+- `bastion-extension-protocol` defines manifests, permissions, trust tiers, signatures, and lockfiles. It verifies Ed25519 publisher signatures over a manifest's directory content against trust anchors the host injects (`TrustAnchors`); it embeds no key, and the tier it derives is shown to the owner but never consulted by enforcement.
 - `bastion-extension-wasm` provides the isolated WASM execution mechanism and does not know product manifests or capabilities.
 - `bastion-sandbox` confines host programs Bastion runs (tool CLIs, stdio MCP servers, subprocess extensions, agent harnesses) at the OS level: bubblewrap or Landlock + seccomp on Linux, Seatbelt on macOS, an AppContainer inside a Job Object on Windows. Deny by default; it knows only paths, environment and network, never capabilities.
 
 ## A turn through the kernel
 
 1. A host constructs an `AgentLoop` with a provider, session manager, responder, memory store, approval gate, and the optional ports it needs.
-2. The host calls `AgentLoop::run_turn_for` with input and a canonical owner identifier.
+2. The host calls `AgentLoop::run_turn_for` with input and a canonical owner identifier, or `AgentLoop::run_turn_with(TurnRequest)` to also name its own session id, mark the input untrusted, or attach an opaque host context.
 3. The runtime loads owner-scoped session state and injected context, applies trust and privacy handling, and runs input guardrails.
 4. The configured responder produces the model-facing response. Native tool calls enter the runtime tool-dispatch path; registered capabilities use `CapabilityRegistry::invoke` for egress, approval, execution, and trust tagging.
 5. The runtime validates output, records session state and usage, emits observer events, and returns text to the host.
+
+## Hosting turns from many requests
+
+The kernel offers mechanisms a host needs to serve concurrent requests; none of them interprets the host's business data.
+
+- **Per-session serialization.** A turn is a read-modify-write over its session's transcript, so turns of one session must not overlap. Every `AgentLoop` serializes its turns through a `SessionLocks` registry (one fair async mutex per session, dropped when unused): turns of the same session run one after the other, turns of different sessions in parallel. Loops over the same database share one registry (`AgentLoop::with_session_locks`). A turn addressed to "the owner's most recent session" holds the owner while it resolves that session, then the session itself, so it also serializes with turns that name the session by id. A session id named by the host is created for its owner on first use and refused with `BastionError::SessionOwnerMismatch` when it belongs to someone else.
+- **Shared loops.** `AgentLoopPool` is one clonable handle a host's request handlers share: it runs each turn on a loop kept for that session (built on demand by the host's `AgentLoopFactory`, the least recently used dropped beyond `max_idle_loops`), holds the session lock for the whole turn, and caps concurrent turns with `max_concurrent_turns`. Per-loop state (a `/as` persona, a `/backend` choice, a live harness session) therefore never crosses sessions.
+- **Host context.** `TurnRequest::with_host_context` attaches a JSON value the kernel carries, unread, to every capability the turn dispatches (`InvokeCtx::host_context`), including a dispatch resolved by an approval reply.
+- **Trace context.** Every span a turn opens (model calls, tool calls, persona routing) is a child of its `invoke_agent` span, which is itself a child of whatever span the host made current. A capability receives its own `execute_tool` span as `InvokeCtx::trace` (`TraceContext::traceparent` gives the W3C header) and as the current OpenTelemetry context while it runs.
+- **Rule delivery.** `PolicyChannel` hands rule revisions to running loops. It keeps a `VersionedContextArtifact` (monotonic versions, `effective_from`, append-only history) and accepts `ContextUpdate`s: a whole revision, or a JSON Merge Patch delta accepted only against the latest version. Each update is answered with a `ContextAck` naming the version in force afterwards (`applied`, `scheduled`, `unchanged` or `rejected` with a reason); an optional `PolicyValidator` can refuse a candidate. A turn takes the revision effective when it starts and keeps it until it ends: capabilities get it as `InvokeCtx::policy`, the `invoke_agent` span carries `<ns>.policy.version`, the `Responder` sees it as `DeploymentContext::policy_revision`, `AgentLoop::last_turn_policy_version` reports it, and context providers assembling the prompt read it through `policy::current_turn_policy()` (a task-local, like `capability::current_approval()`), so a revision published after the turn starts never shows up in that turn's prompt.
 
 An external `AgentRuntime` is a different execution mode: the external harness owns its tool loop. Its descriptor declares which policies Bastion can bridge and which remain harness-owned; see [SUPPORT-MATRIX.md](SUPPORT-MATRIX.md).
 
@@ -71,6 +81,9 @@ An external `AgentRuntime` is a different execution mode: the external harness o
 | `CapabilityRegistry` | `crates/bastion-runtime/src/capability/registry.rs` | Named capability registration and policy mediation |
 | `ApprovalGate` / `PermissionGate` | `crates/bastion-runtime/src/agent/ports.rs` | Typed authorization decisions |
 | `TurnContextProvider` | `crates/bastion-runtime/src/agent/context.rs` | Opaque host context injection |
+| `TurnRequest` / `AgentLoopPool` | `crates/bastion-runtime/src/agent/turn.rs`, `pool.rs` | One host turn; loops shared between concurrent requests |
+| `SessionLocks` | `crates/bastion-runtime/src/session/locks.rs` | Per-session turn serialization |
+| `PolicyChannel` | `crates/bastion-runtime/src/policy.rs` | Versioned, acknowledged rule delivery to running loops |
 | `AgentRuntime` | `crates/bastion-agent-runtime/src/lib.rs` | External agent-harness contract |
 | `SecretResolver` | `crates/bastion-types/src/secret.rs` | Resolution of opaque secret references at a boundary |
 | `Pricing` / `CostMeter` | `crates/bastion-runtime/src/pricing/` | Model prices and per-call metering (admission, span, budget) |
