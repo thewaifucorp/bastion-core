@@ -7,6 +7,43 @@ version).
 
 ## Unreleased
 
+Lands after 0.8.0. `bastion-types` (`BastionError` gained a variant) and
+`bastion-runtime` (`InvokeCtx` gained public fields, so struct literals without
+`..Default::default()` break) take a minor bump on the next tag.
+
+### Added
+
+- **Per-session turn serialization (`bastion-runtime` `session::SessionLocks`).**
+  Turns of one session run one after the other, turns of different sessions
+  in parallel; loops over the same database share one registry
+  (`AgentLoop::with_session_locks`).
+- **`AgentLoop::run_turn_with(TurnRequest)`.** Names a host-chosen session id
+  (created for its owner on first use, refused with the new
+  `BastionError::SessionOwnerMismatch` for another owner), marks the input
+  untrusted, and attaches an opaque host context. `run_turn_for` and
+  `run_turn_for_with_trust` are thin wrappers over it.
+- **`AgentLoopPool` + `AgentLoopFactory`.** One clonable handle for a host's
+  request handlers: per-session serialization, a cap on concurrent turns,
+  and loops kept per session (least recently used dropped first).
+- **`InvokeCtx::host_context`, `InvokeCtx::trace`, `InvokeCtx::policy`.** The
+  turn's opaque host context, the capability's own `execute_tool` span
+  (`TraceContext`, with `traceparent()`), and the rule revision the turn runs
+  under. `InvokeCtx` now derives `Clone`, `Debug` and `Default`.
+- **Rule delivery to running loops (`bastion-runtime` `policy::PolicyChannel`,
+  `bastion-types` `ContextUpdate`/`ContextAck`).** Snapshot or JSON Merge
+  Patch delta over a `VersionedContextArtifact`, acknowledged with the
+  version in force; optional host `PolicyValidator`; one revision per turn,
+  reported by `AgentLoop::last_turn_policy_version` and the
+  `<ns>.policy.version` span attribute.
+
+### Changed
+
+- Every span a turn opens now nests under its `invoke_agent` span (one trace
+  per turn, child of the host's current span); they were separate root spans.
+- SQLite connections install the busy timeout before switching to WAL, so a
+  connection opened while another writes waits instead of failing with
+  `database is locked`.
+
 ## 0.8.0 — 2026-10-15
 
 Repo tag `v0.8.0`. `bastion-types` 0.3.0 → 0.4.0 (`TokenUsage` gained public

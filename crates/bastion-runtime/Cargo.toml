@@ -38,3 +38,5 @@ regex         = "1"
 
 [dev-dependencies]
 tempfile = "3"
+# Real tracer provider so tests can assert span parentage/trace ids.
+opentelemetry_sdk = "0.32"

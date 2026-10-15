@@ -186,6 +186,7 @@ async fn demonstrate_object_policy_denial(agent: &AgentLoop, capability_name: &s
         owner: OWNER_A.to_string(),
         privacy_tier: Some(PrivacyTier::CloudOk),
         allowed_tools: None,
+        ..Default::default()
     };
     let args = serde_json::json!({"object_status": "pending_review"});
 
@@ -242,6 +243,7 @@ async fn demonstrate_trust_quarantine_preserved(agent: &mut AgentLoop, capabilit
             owner: OWNER_A.to_string(),
             privacy_tier: Some(PrivacyTier::CloudOk),
             allowed_tools: None,
+            ..Default::default()
         };
         let blocked = scope
             .invoke(capability_name, serde_json::json!({}), &ctx)

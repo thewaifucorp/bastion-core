@@ -97,6 +97,7 @@ pub async fn route(
                 // persona-dispatched user tool call — no persona contract
                 // applies here, so unrestricted (None) is correct.
                 allowed_tools: None,
+                ..Default::default()
             };
             crate::provider::complete_structured_via_forced_tool_call(
                 provider,

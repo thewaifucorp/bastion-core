@@ -5,9 +5,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// All internal functions must use this helper so that concurrent writes
 /// from the daemon (Telegram double-tap, channel overlap) do not cause
 /// SQLITE_BUSY errors (CONC-1).
+///
+/// The busy timeout is installed FIRST: switching the journal mode needs a
+/// lock too, and without a busy handler a connection opened while another
+/// one writes (two loops serving different sessions at once) failed at once
+/// with `database is locked` instead of waiting.
 fn open_conn(path: &str) -> rusqlite::Result<rusqlite::Connection> {
     let conn = rusqlite::Connection::open(path)?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")?;
+    conn.busy_timeout(std::time::Duration::from_millis(5000))?;
+    conn.execute_batch("PRAGMA journal_mode=WAL;")?;
     Ok(conn)
 }
 
@@ -50,9 +56,6 @@ impl SessionManager {
             let conn = open_conn(&path)?;
             conn.execute_batch(
                 "
-                PRAGMA journal_mode=WAL;
-                PRAGMA busy_timeout=5000;
-
                 CREATE TABLE IF NOT EXISTS sessions (
                     id         TEXT    PRIMARY KEY,
                     owner_id   TEXT    NOT NULL DEFAULT '_local',
@@ -321,6 +324,40 @@ impl SessionManager {
             )?;
             Ok::<_, anyhow::Error>(session_id)
         }).await?
+    }
+
+    /// Make sure the host-named session `session_id` exists and belongs to
+    /// `owner_id`: creates it for `owner_id` when absent, accepts it when the
+    /// owner matches, and fails with [`BastionError::SessionOwnerMismatch`]
+    /// when it belongs to someone else. Insert and check run in one
+    /// statement pair on one connection, so two concurrent first turns of
+    /// the same new session both land on the single row.
+    pub async fn ensure_session_for(&self, session_id: &str, owner_id: &str) -> anyhow::Result<()> {
+        if session_id.is_empty() {
+            anyhow::bail!(BastionError::Session("empty session id".into()));
+        }
+        let path = self.db_path.clone();
+        let sid = session_id.to_owned();
+        let owner = owner_id.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let conn = open_conn(&path)?;
+            let now = now_nanos();
+            conn.execute(
+                "INSERT OR IGNORE INTO sessions (id, owner_id, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![sid, owner, now, now],
+            )?;
+            let stored: String = conn.query_row(
+                "SELECT owner_id FROM sessions WHERE id = ?1",
+                rusqlite::params![sid],
+                |row| row.get(0),
+            )?;
+            if stored != owner {
+                anyhow::bail!(BastionError::SessionOwnerMismatch { session_id: sid });
+            }
+            Ok(())
+        })
+        .await?
     }
 
     pub async fn load_most_recent_id(&self) -> anyhow::Result<Option<String>> {
@@ -890,6 +927,29 @@ mod tests {
         let (_f, sm) = make_db().await;
         // Re-running init_schema against the same DB must not error.
         sm.init_schema().await.expect("second init_schema call");
+    }
+
+    #[tokio::test]
+    async fn ensure_session_for_creates_accepts_and_refuses_other_owner() {
+        let (_f, sm) = make_db().await;
+        sm.ensure_session_for("conv-1", "alice").await.unwrap();
+        // Idempotent for the same owner.
+        sm.ensure_session_for("conv-1", "alice").await.unwrap();
+        assert_eq!(
+            sm.load_most_recent_id_for("alice")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("conv-1")
+        );
+
+        let err = sm.ensure_session_for("conv-1", "bob").await.unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<BastionError>(),
+            Some(BastionError::SessionOwnerMismatch { session_id }) if session_id == "conv-1"
+        ));
+        assert!(sm.load_most_recent_id_for("bob").await.unwrap().is_none());
+        assert!(sm.ensure_session_for("", "alice").await.is_err());
     }
 
     #[tokio::test]
