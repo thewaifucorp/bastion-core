@@ -6,6 +6,7 @@ struct client.rs:McpClient
 const client.rs:UNIX_SOCKET_SCHEME
 fn client.rs:call_tool_with_timeout
 fn client.rs:connect_from_config
+fn client.rs:connect_from_config_with_secrets
 fn client.rs:registry
 fn client.rs:with_composio_oauth
 use lib.rs:*
