@@ -7,14 +7,35 @@ version).
 
 ## Unreleased
 
-### Model pricing and metering (BUP-01..06) — pending release
+## 0.8.0 — 2026-10-15
 
-Breaking: `bastion-types` (`TokenUsage` gained public fields) needs a minor
-bump (0.3.0 → 0.4.0), and with it `bastion-runtime` (0.4.2 → 0.5.0, re-exports
-the type; metered calls now fail closed). `bastion-providers`,
-`bastion-cognition` change behavior without breaking their API.
+Repo tag `v0.8.0`. `bastion-types` 0.3.0 → 0.4.0 (`TokenUsage` gained public
+fields, `BastionError` gained `PriceUnknown`) and `bastion-runtime` 0.4.2 →
+0.5.0 (re-exports the type; metered calls now fail closed) set the minor bump
+on the tag. `bastion-agent-runtime` 0.3.1 → 0.4.0 (`ResumeSpec` gained a
+public field, so struct literals break). `bastion-providers` 0.2.7 → 0.2.8 and
+`bastion-cognition` 0.2.2 → 0.2.3 change behavior without breaking their API.
 
-#### Added
+### Added
+
+- **`claude` runtime: Claude Code on the user's subscription, under the
+  user's own login (`bastion-agent-runtime` `claude_code`).**
+  `ClaudeCodeRuntime` drives the installed, unmodified `claude` binary over
+  its stream-json mode (`-p --input-format stream-json --output-format
+  stream-json`), one process per session. Guarded tools ask Bastion first
+  (`--permission-prompt-tool stdio`): each `can_use_tool` request becomes a
+  `PermissionRequest` with the proposed edits, and `respond_permission`
+  answers it; a turn-scoped denial interrupts the turn and keeps the process.
+  The session loads none of the operator's Claude Code settings, pins the
+  asking permission mode, loads only the MCP servers Bastion bridged (in a
+  `0600` file, pre-allowed) and turns auto memory off. Every `ANTHROPIC_*`
+  variable and every other Claude credential or provider switch is withheld
+  from the binary; nothing reads `~/.claude`, collects a token or sends
+  Claude Code's identity itself. The Claude Code conversation is the child
+  of the Bastion session (`--session-id`, persisted handle with its working
+  directory, `--resume` after a restart, `NotResumable` when Claude Code no
+  longer has it). Offline tests run the full conformance suite against a
+  scripted `claude`.
 
 - **`bastion_runtime::pricing`.** The packaged Langfuse model price table
   (`crates/bastion-runtime/pricing/`, vendored unmodified with its MIT notice
@@ -45,7 +66,7 @@ the type; metered calls now fail closed). `bastion-providers`,
 - `scripts/update-model-prices.sh` and the weekly `model-prices` workflow,
   which refreshes the table through a pull request.
 
-#### Changed
+### Changed
 
 - **Every model call of a turn is metered** — persona routing and dispatch,
   Cabinet, the tool loop, the fallback ladder and compaction; before, only
@@ -69,35 +90,60 @@ the type; metered calls now fail closed). `bastion-providers`,
   `subscription` usage (zero dollars) on a span and the session total.
 - `UsageAccum::merge_from` adopts the other side's fidelity when merging into
   an empty accumulator.
+- **`ResumeSpec` gained `mcp_bridge: Option<McpBridgeSpec>`**
+  (`#[serde(default)]`). `AgentLoop` passes the owner's bridged MCP servers
+  when it reattaches a runtime session, so a restart no longer cuts the
+  harness off from Bastion's memory and capabilities. Struct-literal
+  constructions of `ResumeSpec` must add the field (`mcp_bridge: None` keeps
+  the old behavior).
 
-### Earlier in this cycle
+## 0.7.0 — 2026-09-26
 
 Repo tag `v0.7.0`. `bastion-sandbox` 0.1.0 → 0.2.0 (`Backend` gained a
-variant and is now `#[non_exhaustive]`) sets the minor bump on the tag; the
-rest is additive — `bastion-mesh` 0.1.0 → 0.1.1 (the `devices` module),
-`bastion-runtime` 0.4.1 → 0.4.2 (`current_approval`), `bastion-mcp` 0.2.1 →
-0.2.2, `bastion-agent-runtime` 0.3.0 → 0.3.1.
+variant and is now `#[non_exhaustive]`) sets the minor; the rest is additive
+— `bastion-mesh` 0.1.0 → 0.1.1 (the `devices` module), `bastion-runtime`
+0.4.1 → 0.4.2 (`current_approval`); `bastion-mcp` 0.2.1 → 0.2.2 and
+`bastion-agent-runtime` 0.3.0 → 0.3.1 are fixes.
 
 ### Added
 
-- **`claude` runtime: Claude Code on the user's subscription, under the
-  user's own login (`bastion-agent-runtime` `claude_code`).**
-  `ClaudeCodeRuntime` drives the installed, unmodified `claude` binary over
-  its stream-json mode (`-p --input-format stream-json --output-format
-  stream-json`), one process per session. Guarded tools ask Bastion first
-  (`--permission-prompt-tool stdio`): each `can_use_tool` request becomes a
-  `PermissionRequest` with the proposed edits, and `respond_permission`
-  answers it; a turn-scoped denial interrupts the turn and keeps the process.
-  The session loads none of the operator's Claude Code settings, pins the
-  asking permission mode, loads only the MCP servers Bastion bridged (in a
-  `0600` file, pre-allowed) and turns auto memory off. Every `ANTHROPIC_*`
-  variable and every other Claude credential or provider switch is withheld
-  from the binary; nothing reads `~/.claude`, collects a token or sends
-  Claude Code's identity itself. The Claude Code conversation is the child
-  of the Bastion session (`--session-id`, persisted handle with its working
-  directory, `--resume` after a restart, `NotResumable` when Claude Code no
-  longer has it). Offline tests run the full conformance suite against a
-  scripted `claude`.
+- **Windows backend for `bastion-sandbox` (BMD-05).** `Sandbox::detect` on
+  Windows 10+ returns `Backend::AppContainer`: the helper starts the program
+  in an AppContainer (lowbox token — Low integrity, privileges stripped,
+  every access checked a second time against the container) inside a Job
+  Object, waits for it and exits with its status. Same public API and helper
+  protocol (`--backend appcontainer`) as the other backends.
+  - **Filesystem:** the container reaches what Windows grants every
+    AppContainer (reading `C:\Windows`, `C:\Program Files`) and the spec's
+    paths, each granted by an allow ACE for the container SID (read/execute,
+    or read/write/delete without `WRITE_DAC`). The operator's profile and any
+    other path fail the container half of the access check.
+  - **One container per grant set:** its name hashes the grants and the
+    network mode, so the ACEs left on a path serve only later launches with
+    the same grants; a path already readable by every AppContainer, or a
+    read-only path whose ACL the operator cannot change, is not rewritten.
+  - **Network:** blocked = no capabilities, every socket dropped by the
+    Windows Filtering Platform, loopback included. Allowed = `internetClient`,
+    `internetClientServer`, `privateNetworkClientServer`, plus a loopback
+    exemption so the host's `127.0.0.1` is reachable — that exemption is a
+    machine setting and needs an elevated helper; unelevated, the child has
+    the network but not the host's loopback.
+  - **Job Object:** the tree dies with the helper (killed included) and has
+    no access to other processes' windows, the clipboard, global atoms or
+    system settings.
+  - **Environment:** the spec's variables, as the child's environment block,
+    plus the three Windows adds to every AppContainer process —
+    `LOCALAPPDATA`, `TEMP`, `TMP`, pointing at the container's own folder,
+    writable by that container only (`CreateProcessW` refuses an
+    AppContainer launch whose block has no `LOCALAPPDATA`, so the helper puts
+    a placeholder that Windows replaces). Windows programs usually need
+    `SystemRoot`; the spec must name it.
+  - The Win32 calls live in one module (`src/appcontainer/win32.rs`) with a
+    `SAFETY` note on each block; the crate lint went from `forbid` to `deny`
+    so that module alone can allow `unsafe_code`.
+- **Windows CI job (BMD-07).** `windows-latest` runs clippy
+  (`-D warnings`) and the whole workspace's tests with
+  `BASTION_SANDBOX_TESTS_REQUIRED=1`, so the confinement suites cannot skip.
 
 - **Remote capabilities on the owner's other devices (`bastion-mesh`
   `devices`, BMD-08..12, BMD-15).** Slice 2 of `multi-device-brain-and-nodes`.
@@ -172,61 +218,6 @@ rest is additive — `bastion-mesh` 0.1.0 → 0.1.1 (the `devices` module),
   the call being dispatched as the resolution of an owner's approval, so a
   forwarding capability can pass it on.
 - `AgeIdentity::sign` / `verifying_key_bytes`.
-
-### Changed
-
-- **`ResumeSpec` gained `mcp_bridge: Option<McpBridgeSpec>`**
-  (`#[serde(default)]`). `AgentLoop` passes the owner's bridged MCP servers
-  when it reattaches a runtime session, so a restart no longer cuts the
-  harness off from Bastion's memory and capabilities. Struct-literal
-  constructions of `ResumeSpec` must add the field (`mcp_bridge: None` keeps
-  the old behavior).
-
-## 0.7.0 — 2026-09-26
-
-Repo tag `v0.7.0`. `bastion-sandbox` 0.1.0 → 0.2.0 (`Backend` gained a
-variant and is now `#[non_exhaustive]`) sets the minor; `bastion-mcp` 0.2.1 →
-0.2.2 and `bastion-agent-runtime` 0.3.0 → 0.3.1 are fixes.
-
-### Added
-
-- **Windows backend for `bastion-sandbox` (BMD-05).** `Sandbox::detect` on
-  Windows 10+ returns `Backend::AppContainer`: the helper starts the program
-  in an AppContainer (lowbox token — Low integrity, privileges stripped,
-  every access checked a second time against the container) inside a Job
-  Object, waits for it and exits with its status. Same public API and helper
-  protocol (`--backend appcontainer`) as the other backends.
-  - **Filesystem:** the container reaches what Windows grants every
-    AppContainer (reading `C:\Windows`, `C:\Program Files`) and the spec's
-    paths, each granted by an allow ACE for the container SID (read/execute,
-    or read/write/delete without `WRITE_DAC`). The operator's profile and any
-    other path fail the container half of the access check.
-  - **One container per grant set:** its name hashes the grants and the
-    network mode, so the ACEs left on a path serve only later launches with
-    the same grants; a path already readable by every AppContainer, or a
-    read-only path whose ACL the operator cannot change, is not rewritten.
-  - **Network:** blocked = no capabilities, every socket dropped by the
-    Windows Filtering Platform, loopback included. Allowed = `internetClient`,
-    `internetClientServer`, `privateNetworkClientServer`, plus a loopback
-    exemption so the host's `127.0.0.1` is reachable — that exemption is a
-    machine setting and needs an elevated helper; unelevated, the child has
-    the network but not the host's loopback.
-  - **Job Object:** the tree dies with the helper (killed included) and has
-    no access to other processes' windows, the clipboard, global atoms or
-    system settings.
-  - **Environment:** the spec's variables, as the child's environment block,
-    plus the three Windows adds to every AppContainer process —
-    `LOCALAPPDATA`, `TEMP`, `TMP`, pointing at the container's own folder,
-    writable by that container only (`CreateProcessW` refuses an
-    AppContainer launch whose block has no `LOCALAPPDATA`, so the helper puts
-    a placeholder that Windows replaces). Windows programs usually need
-    `SystemRoot`; the spec must name it.
-  - The Win32 calls live in one module (`src/appcontainer/win32.rs`) with a
-    `SAFETY` note on each block; the crate lint went from `forbid` to `deny`
-    so that module alone can allow `unsafe_code`.
-- **Windows CI job (BMD-07).** `windows-latest` runs clippy
-  (`-D warnings`) and the whole workspace's tests with
-  `BASTION_SANDBOX_TESTS_REQUIRED=1`, so the confinement suites cannot skip.
 
 ### Changed
 
