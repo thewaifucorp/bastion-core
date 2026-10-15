@@ -27,7 +27,11 @@
 //!   `<ns>.policy.version`, the `Responder` sees it as
 //!   `DeploymentContext::policy_revision`, and
 //!   [`crate::agent::loop_::AgentLoop::last_turn_policy_version`] reports
-//!   the version the last turn actually ran under.
+//!   the version the last turn actually ran under. Context providers
+//!   assembling the turn's prompt read it through [`current_turn_policy`],
+//!   never through [`PolicyChannel::effective`], so a revision published
+//!   between the turn's start and the prompt assembly cannot make the
+//!   prompt disagree with the version the turn reports.
 //! - **Host validation.** An optional [`PolicyValidator`] sees each
 //!   candidate revision before it is published; a refusal publishes nothing.
 //!
@@ -41,6 +45,31 @@ use bastion_types::{
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+tokio::task_local! {
+    static CURRENT_TURN_POLICY: Option<Arc<ContextRevision>>;
+}
+
+/// The rule revision pinned by the turn in flight: the one its
+/// capabilities receive and its span and
+/// [`crate::agent::loop_::AgentLoop::last_turn_policy_version`] report.
+///
+/// `None` outside a turn, or when no revision was effective when the turn
+/// started. A [`crate::agent::context::TurnContextProvider`] that renders
+/// rules into the prompt reads this instead of
+/// [`PolicyChannel::effective`], which may already name a newer revision
+/// published after the turn started.
+pub fn current_turn_policy() -> Option<Arc<ContextRevision>> {
+    CURRENT_TURN_POLICY.try_with(Clone::clone).ok().flatten()
+}
+
+/// Run `fut` with `revision` as [`current_turn_policy`].
+pub(crate) async fn with_turn_policy<F: std::future::Future>(
+    revision: Option<Arc<ContextRevision>>,
+    fut: F,
+) -> F::Output {
+    CURRENT_TURN_POLICY.scope(revision, fut).await
+}
 
 /// Host check run on a candidate revision before it is published.
 pub trait PolicyValidator: Send + Sync {

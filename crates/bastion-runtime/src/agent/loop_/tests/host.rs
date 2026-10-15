@@ -612,3 +612,102 @@ async fn approval_resolution_dispatch_carries_the_reply_turn_host_context() {
     assert_eq!(calls[0].ctx.host_context.as_deref(), Some(&json!({"k": 1})));
     assert_eq!(calls[0].ctx.policy.as_ref().map(|r| r.version), Some(4));
 }
+
+/// `(pinned, latest)` rule versions a provider saw while assembling a prompt.
+type SeenVersions = Arc<Mutex<Vec<(Option<u64>, Option<u64>)>>>;
+
+/// Publishes a new revision while the prompt is being assembled (after the
+/// turn pinned its revision), then reports what a provider sees.
+struct PublishingRulesProvider {
+    policy: PolicyChannel,
+    mid_turn_update: Mutex<Option<ContextUpdate>>,
+    seen: SeenVersions,
+}
+
+#[async_trait]
+impl crate::agent::context::TurnContextProvider for PublishingRulesProvider {
+    async fn context_for_turn(
+        &self,
+        _owner: &str,
+        _turn_msg: &str,
+        _persona: Option<&str>,
+    ) -> Vec<crate::agent::context::ContextBlock> {
+        let update = self.mid_turn_update.lock().unwrap().take();
+        if let Some(update) = update {
+            assert!(self.policy.apply(update).is_published());
+        }
+        let pinned = crate::policy::current_turn_policy().map(|r| r.version);
+        let latest = self.policy.effective().map(|r| r.version);
+        self.seen.lock().unwrap().push((pinned, latest));
+        vec![crate::agent::context::ContextBlock {
+            content: format!("rules v{}", pinned.unwrap_or_default()),
+            max_tier: PrivacyTier::CloudOk,
+        }]
+    }
+}
+
+/// Assembles the turn's system prompt and answers with it.
+struct PromptEchoResponder;
+
+#[async_trait]
+impl Responder for PromptEchoResponder {
+    async fn respond(&self, turn: TurnContext<'_>) -> anyhow::Result<RespondOutcome> {
+        let text = turn
+            .kernel
+            .build_system_prompt(turn.owner, turn.user_input, None)
+            .await;
+        Ok(RespondOutcome {
+            text,
+            attribution: vec![],
+            turn_tier: Some(PrivacyTier::CloudOk),
+            allowed_tools: None,
+        })
+    }
+}
+
+#[tokio::test]
+async fn context_providers_see_the_revision_pinned_by_the_turn() {
+    let f = NamedTempFile::new().unwrap();
+    let path = f.path().to_str().unwrap().to_owned();
+
+    let policy = PolicyChannel::new();
+    assert!(policy.apply(rule(1, json!({"limit": 5}))).is_published());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut agent = make_loop(&path).await.with_policy_channel(policy.clone());
+    agent.responder = Arc::new(PromptEchoResponder);
+    agent.add_context_provider(Box::new(PublishingRulesProvider {
+        policy: policy.clone(),
+        mid_turn_update: Mutex::new(Some(rule(2, json!({"limit": 9})))),
+        seen: seen.clone(),
+    }));
+
+    // Outside a turn there is no pinned revision.
+    assert!(crate::policy::current_turn_policy().is_none());
+
+    let prompt = agent
+        .run_turn_with(TurnRequest::new("alice", "check the case").in_session("pin-1"))
+        .await
+        .unwrap();
+    assert!(prompt.contains("rules v1"), "{prompt}");
+
+    // Revision 2 landed between the pin and the prompt assembly: the channel
+    // already reports it, but the provider sees the turn's revision, the
+    // same one the turn reports.
+    let calls = seen.lock().unwrap().clone();
+    assert!(!calls.is_empty());
+    assert!(calls.iter().all(|c| *c == (Some(1), Some(2))));
+    assert_eq!(agent.last_turn_policy_version(), Some(1));
+
+    // The next turn pins (and shows) revision 2.
+    seen.lock().unwrap().clear();
+    let prompt = agent
+        .run_turn_with(TurnRequest::new("alice", "again").in_session("pin-1"))
+        .await
+        .unwrap();
+    assert!(prompt.contains("rules v2"), "{prompt}");
+    let calls = seen.lock().unwrap().clone();
+    assert!(!calls.is_empty());
+    assert!(calls.iter().all(|c| *c == (Some(2), Some(2))));
+    assert_eq!(agent.last_turn_policy_version(), Some(2));
+    assert!(crate::policy::current_turn_policy().is_none());
+}
