@@ -1,6 +1,6 @@
 {
   "repository": "langfuse/langfuse",
   "path": "worker/src/constants/default-model-prices.json",
-  "commit": "873b5db9919a3f1947cfa8b16da10b6228f05b1d",
-  "version": "langfuse@873b5db"
+  "commit": "8c50660ebe2103a814d46d73ee765cc0e8f50acc",
+  "version": "langfuse@8c50660"
 }
